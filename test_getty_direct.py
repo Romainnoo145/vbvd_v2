@@ -4,13 +4,16 @@ import httpx
 
 async def test_getty():
     query = """
-PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+PREFIX luc: <http://www.ontotext.com/connectors/lucene#>
 PREFIX gvp: <http://vocab.getty.edu/ontology#>
+PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+PREFIX xl: <http://www.w3.org/2008/05/skos-xl#>
 
 SELECT ?subject ?label WHERE {
-    ?subject skos:prefLabel ?label .
-    ?subject gvp:broaderExtended <http://vocab.getty.edu/aat/> .
-    FILTER(CONTAINS(LCASE(STR(?label)), "impressionism"))
+    ?subject luc:term "impressionism";
+             a gvp:Concept;
+             skos:inScheme <http://vocab.getty.edu/aat/>;
+             gvp:prefLabelGVP/xl:literalForm ?label .
 }
 LIMIT 5
     """

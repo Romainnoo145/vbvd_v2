@@ -266,8 +266,18 @@ class EssentialDataClient:
     async def _search_getty(self, query: str, context: str) -> List[Dict]:
         """
         Search Getty Vocabularies (AAT, ULAN) using SPARQL
+
+        NOTE: Getty search is OPTIONAL and may not return results due to
+        SPARQL endpoint limitations. The system gracefully degrades without it.
         """
         try:
+            logger.warning("Getty Vocabularies search is currently optional and may not return results")
+            # Getty SPARQL endpoint has reliability issues - return empty results
+            # System will rely on Wikidata and Wikipedia instead
+            return []
+
+            # Original implementation kept for reference but disabled:
+            """
             results = []
 
             # Determine which vocabulary to search
@@ -283,11 +293,10 @@ class EssentialDataClient:
             sparql_url = self.config.get_endpoint_url('getty_vocabularies', 'sparql')
             headers = self.config.get_headers('getty_vocabularies')
             headers['Accept'] = 'application/sparql-results+json'
-            headers['Content-Type'] = 'application/x-www-form-urlencoded'
 
-            response = await self.client.post(
+            response = await self.client.get(
                 sparql_url,
-                data={'query': sparql_query, 'format': 'json'},
+                params={'query': sparql_query},
                 headers=headers,
                 timeout=30.0
             )
@@ -318,21 +327,25 @@ class EssentialDataClient:
             else:
                 logger.error(f"Getty search failed with status {response.status_code}")
                 return []
+            """
 
         except Exception as e:
-            logger.error(f"Getty search failed: {e}")
+            logger.warning(f"Getty search skipped (optional): {e}")
             return []
 
     def _build_getty_aat_query(self, query: str) -> str:
         """Build SPARQL query for Getty AAT (Art & Architecture Thesaurus)"""
         return f"""
-PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+PREFIX luc: <http://www.ontotext.com/connectors/lucene#>
 PREFIX gvp: <http://vocab.getty.edu/ontology#>
+PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+PREFIX xl: <http://www.w3.org/2008/05/skos-xl#>
 
 SELECT ?subject ?label WHERE {{
-    ?subject skos:prefLabel ?label .
-    ?subject gvp:broaderExtended <http://vocab.getty.edu/aat/> .
-    FILTER(CONTAINS(LCASE(STR(?label)), "{query.lower()}"))
+    ?subject luc:term "{query}";
+             a gvp:Concept;
+             skos:inScheme <http://vocab.getty.edu/aat/>;
+             gvp:prefLabelGVP/xl:literalForm ?label .
 }}
 LIMIT 10
         """
@@ -340,13 +353,16 @@ LIMIT 10
     def _build_getty_ulan_query(self, query: str) -> str:
         """Build SPARQL query for Getty ULAN (Union List of Artist Names)"""
         return f"""
-PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+PREFIX luc: <http://www.ontotext.com/connectors/lucene#>
 PREFIX gvp: <http://vocab.getty.edu/ontology#>
+PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
 PREFIX xl: <http://www.w3.org/2008/05/skos-xl#>
 
 SELECT ?subject ?label WHERE {{
-    ?subject gvp:prefLabelGVP/xl:literalForm ?label .
-    FILTER(CONTAINS(LCASE(STR(?label)), "{query.lower()}"))
+    ?subject luc:term "{query}";
+             a gvp:PersonConcept;
+             skos:inScheme <http://vocab.getty.edu/ulan/>;
+             gvp:prefLabelGVP/xl:literalForm ?label .
 }}
 LIMIT 10
         """

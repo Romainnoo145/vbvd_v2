@@ -51,7 +51,8 @@ class EssentialDataConfig:
             'search_ulan': 'http://vocab.getty.edu/ulan/search.json',
             'cost': 'Free',
             'rate_limit': None,
-            'note': 'Professional art historical terminology',
+            'status': 'OPTIONAL - SPARQL endpoint has reliability issues',
+            'note': 'Professional art historical terminology - CURRENTLY DISABLED due to SPARQL query limitations. System uses Wikidata as primary authority instead.',
             'vocabularies': {
                 'aat': 'Art & Architecture Thesaurus',
                 'ulan': 'Union List of Artist Names',
