@@ -6,6 +6,10 @@ from dataclasses import dataclass, field
 from typing import Dict, Any, Optional
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 
 @dataclass

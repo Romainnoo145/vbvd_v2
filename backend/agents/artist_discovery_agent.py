@@ -125,23 +125,30 @@ class ArtistDiscoveryAgent:
         logger.info(f"Starting artist discovery for session {session_id}")
         start_time = datetime.utcnow()
 
-        # Step 1: Build SPARQL queries based on validated concepts
-        artist_queries = self._build_artist_queries(refined_theme.validated_concepts)
+        # Step 1: Try Yale LUX first (faster and more reliable)
+        raw_artist_data = []
+        logger.info("Attempting Yale LUX artist discovery first")
+        lux_artists = await self._discover_artists_from_yale_lux(refined_theme)
+        if lux_artists:
+            logger.info(f"Found {len(lux_artists)} artists via Yale LUX")
+            raw_artist_data.extend(lux_artists)
 
         # Step 1b: If we have reference artists, find related artists (HIGH RELEVANCE)
         related_artists_data = []
         if hasattr(refined_theme, 'reference_artists') and refined_theme.reference_artists:
             logger.info(f"Discovering related artists for {len(refined_theme.reference_artists)} reference artists")
             related_artists_data = await self._discover_related_artists(refined_theme.reference_artists)
+            if related_artists_data:
+                for artist in related_artists_data:
+                    artist['from_reference'] = True  # Mark for relevance boost
+                raw_artist_data.extend(related_artists_data)
 
-        # Step 2: Execute parallel searches across all sources
-        raw_artist_data = await self._execute_artist_searches(artist_queries)
-
-        # Step 2b: Merge related artists (they get priority boost later)
-        if related_artists_data:
-            for artist in related_artists_data:
-                artist['from_reference'] = True  # Mark for relevance boost
-            raw_artist_data.extend(related_artists_data)
+        # Step 2: Only use Wikidata if we don't have enough artists yet
+        if len(raw_artist_data) < max_artists * 3:  # Need 3x for filtering
+            logger.info(f"Supplementing with Wikidata queries ({len(raw_artist_data)} artists so far)")
+            artist_queries = self._build_artist_queries(refined_theme.validated_concepts)
+            wikidata_artists = await self._execute_artist_searches(artist_queries)
+            raw_artist_data.extend(wikidata_artists)
 
         # Step 3: Deduplicate and merge artist records
         merged_artists = self._merge_artist_records(raw_artist_data)
@@ -400,64 +407,100 @@ class ArtistDiscoveryAgent:
         """
 
     def _build_wikidata_text_artist_query(self, concept_label: str) -> str:
-        """Fallback text-based artist query for concepts without Getty URI"""
-        return f"""
-        PREFIX wd: <http://www.wikidata.org/entity/>
-        PREFIX wdt: <http://www.wikidata.org/prop/direct/>
-        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-        PREFIX schema: <http://schema.org/>
+        """Simplified artist query using direct property search"""
+        # Map concept to Wikidata movement/genre QID where possible
+        movement_mapping = {
+            'geometric abstraction': 'Q1661415',  # Geometric abstraction
+            'color field painting': 'Q1124724',   # Color field
+            'minimalism': 'Q173782',              # Minimalism
+            'de stijl': 'Q47116',                 # De Stijl
+            'concrete art': 'Q1124724',           # Concrete art (use color field as proxy)
+            'monochrome painting': 'Q173782',     # Use minimalism as proxy
+            'abstract art': 'Q162729',            # Abstract art
+            'abstract expressionism': 'Q131808',   # Abstract expressionism
+        }
 
-        SELECT DISTINCT ?artist ?artistLabel ?description
-               ?birth ?death ?nationality ?nationalityLabel
-               ?movement ?movementLabel ?image ?birthPlace ?birthPlaceLabel
-               ?gender ?genderLabel ?ethnicGroup ?ethnicGroupLabel
-        WHERE {{
-          ?artist wdt:P106/wdt:P279* wd:Q483501 .  # Occupation: artist
+        movement_qid = movement_mapping.get(concept_label.lower())
 
-          {{
-            ?artist rdfs:label ?label .
-            FILTER(CONTAINS(LCASE(?label), "{concept_label.lower()}"))
-          }} UNION {{
-            ?artist schema:description ?desc .
-            FILTER(CONTAINS(LCASE(?desc), "{concept_label.lower()}"))
-          }}
+        if movement_qid:
+            # Use direct movement query (much faster)
+            return f"""
+            PREFIX wd: <http://www.wikidata.org/entity/>
+            PREFIX wdt: <http://www.wikidata.org/prop/direct/>
 
-          OPTIONAL {{ ?artist wdt:P569 ?birth }}
-          OPTIONAL {{ ?artist wdt:P570 ?death }}
-          OPTIONAL {{ ?artist wdt:P27 ?nationality }}
-          OPTIONAL {{ ?artist wdt:P135 ?movement }}
-          OPTIONAL {{ ?artist wdt:P18 ?image }}
-          OPTIONAL {{ ?artist wdt:P19 ?birthPlace }}
-          OPTIONAL {{ ?artist wdt:P21 ?gender }}
-          OPTIONAL {{ ?artist wdt:P172 ?ethnicGroup }}
-          OPTIONAL {{ ?artist schema:description ?description FILTER(LANG(?description) = "en") }}
+            SELECT DISTINCT ?artist ?artistLabel ?description
+                   ?birth ?death ?nationality ?nationalityLabel
+                   ?movement ?movementLabel ?image ?birthPlace ?birthPlaceLabel
+                   ?gender ?genderLabel ?ethnicGroup ?ethnicGroupLabel
+            WHERE {{
+              ?artist wdt:P135 wd:{movement_qid} .  # Movement
+              ?artist wdt:P106 wd:Q1028181 .  # Occupation: painter (more specific)
 
-          SERVICE wikibase:label {{
-            bd:serviceParam wikibase:language "[AUTO_LANGUAGE],en" .
-          }}
-        }}
-        LIMIT 30
-        """
+              OPTIONAL {{ ?artist wdt:P569 ?birth }}
+              OPTIONAL {{ ?artist wdt:P570 ?death }}
+              OPTIONAL {{ ?artist wdt:P27 ?nationality }}
+              OPTIONAL {{ ?artist wdt:P135 ?movement }}
+              OPTIONAL {{ ?artist wdt:P18 ?image }}
+              OPTIONAL {{ ?artist wdt:P19 ?birthPlace }}
+              OPTIONAL {{ ?artist wdt:P21 ?gender }}
+              OPTIONAL {{ ?artist wdt:P172 ?ethnicGroup }}
+              OPTIONAL {{ ?artist schema:description ?description FILTER(LANG(?description) = "en") }}
+
+              SERVICE wikibase:label {{
+                bd:serviceParam wikibase:language "[AUTO_LANGUAGE],en" .
+              }}
+            }}
+            LIMIT 25
+            """
+        else:
+            # Very simple fallback - just query by occupation
+            return f"""
+            PREFIX wd: <http://www.wikidata.org/entity/>
+            PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+
+            SELECT DISTINCT ?artist ?artistLabel ?description
+                   ?birth ?death ?nationality ?nationalityLabel
+                   ?movement ?movementLabel ?image
+            WHERE {{
+              ?artist wdt:P106 wd:Q1028181 .  # Occupation: painter
+              ?artist wdt:P135 ?movement .     # Has movement
+
+              OPTIONAL {{ ?artist wdt:P569 ?birth }}
+              OPTIONAL {{ ?artist wdt:P570 ?death }}
+              OPTIONAL {{ ?artist wdt:P27 ?nationality }}
+              OPTIONAL {{ ?artist wdt:P18 ?image }}
+              OPTIONAL {{ ?artist schema:description ?description FILTER(LANG(?description) = "en") }}
+
+              SERVICE wikibase:label {{
+                bd:serviceParam wikibase:language "[AUTO_LANGUAGE],en" .
+              }}
+            }}
+            LIMIT 20
+            """
 
     async def _execute_artist_searches(self, queries: List[ArtistSearchQuery]) -> List[Dict[str, Any]]:
-        """Execute all SPARQL queries in parallel"""
-        logger.debug(f"Executing {len(queries)} artist search queries")
+        """Execute SPARQL queries sequentially with delays to avoid rate limiting"""
+        logger.info(f"Executing {len(queries)} artist search queries sequentially")
 
-        tasks = []
-        for query in queries:
-            if query.query_type == "wikidata":
-                tasks.append(self._execute_wikidata_query(query))
-
-        # Execute in parallel
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Flatten results and handle exceptions
         all_artists = []
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                logger.error(f"Query {i} failed: {result}")
-            elif isinstance(result, list):
-                all_artists.extend(result)
+
+        for i, query in enumerate(queries):
+            if query.query_type == "wikidata":
+                try:
+                    logger.info(f"Executing query {i+1}/{len(queries)}: {query.concept_label}")
+                    result = await self._execute_wikidata_query(query)
+
+                    if isinstance(result, list):
+                        all_artists.extend(result)
+                        logger.info(f"Query {i+1} returned {len(result)} artists")
+
+                    # Add delay between queries to avoid rate limiting (Wikidata requires this)
+                    if i < len(queries) - 1:
+                        await asyncio.sleep(2.0)  # 2 second delay between queries
+
+                except Exception as e:
+                    logger.error(f"Query {i+1} failed: {e}")
+                    continue
 
         logger.info(f"Retrieved {len(all_artists)} raw artist records")
         return all_artists
@@ -471,8 +514,8 @@ class ArtistDiscoveryAgent:
                 'User-Agent': 'AI-Curator-Assistant/1.0 (Educational Project)'
             }
 
-            # Use a dedicated client for SPARQL queries
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            # Use a dedicated client for SPARQL queries with longer timeout
+            async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(
                     sparql_url,
                     data={'query': query.sparql, 'format': 'json'},
@@ -1074,6 +1117,99 @@ REASONING: [2-3 sentences explaining the relevance assessment]"""
 
         return min(1.0, score)
 
+    async def _discover_artists_from_yale_lux(self, refined_theme: RefinedTheme) -> List[Dict[str, Any]]:
+        """
+        Discover artists via Yale LUX API - much faster than Wikidata
+        Uses agent type='Person' with movement/style filtering
+        """
+        all_artists = []
+
+        try:
+            # Build search queries for concepts
+            for concept in refined_theme.validated_concepts[:4]:  # Limit to top 4 concepts
+                try:
+                    search_url = "https://lux.collections.yale.edu/api/search/agent"
+
+                    # Try keyword search on concept
+                    query = {
+                        "q": concept.refined_concept,
+                        "page": 1,
+                        "_pageSize": 20
+                    }
+
+                    async with httpx.AsyncClient(timeout=15.0) as client:
+                        response = await client.get(search_url, params=query)
+
+                        if response.status_code == 200:
+                            data = response.json()
+                            items = data.get('orderedItems', [])
+
+                            for item in items:
+                                # Extract basic artist data
+                                artist_id = item.get('id', '')
+                                artist_data = {
+                                    'source': 'yale_lux',
+                                    'lux_uri': artist_id,
+                                    'name': '',
+                                    'description': '',
+                                    'birth_year': None,
+                                    'death_year': None,
+                                    'nationality': None
+                                }
+
+                                # Parse identified_by for name
+                                identified_by = item.get('identified_by', [])
+                                for identifier in identified_by:
+                                    if identifier.get('type') == 'Name' and identifier.get('classified_as'):
+                                        for classification in identifier.get('classified_as', []):
+                                            if 'Primary' in classification.get('_label', ''):
+                                                artist_data['name'] = identifier.get('content', '')
+                                                break
+
+                                # Get biographical dates
+                                if 'born' in item:
+                                    timespan = item['born'].get('timespan', {})
+                                    begin = timespan.get('begin_of_the_begin', '')
+                                    if begin:
+                                        try:
+                                            artist_data['birth_year'] = int(begin[:4])
+                                        except:
+                                            pass
+
+                                if 'died' in item:
+                                    timespan = item['died'].get('timespan', {})
+                                    end = timespan.get('end_of_the_end', '')
+                                    if end:
+                                        try:
+                                            artist_data['death_year'] = int(end[:4])
+                                        except:
+                                            pass
+
+                                # Get description
+                                referred_to_by = item.get('referred_to_by', [])
+                                for ref in referred_to_by:
+                                    if ref.get('type') == 'LinguisticObject':
+                                        artist_data['description'] = ref.get('content', '')[:500]
+                                        break
+
+                                if artist_data['name']:
+                                    all_artists.append(artist_data)
+
+                            logger.info(f"Yale LUX: Found {len(items)} artists for '{concept.refined_concept}'")
+
+                        # Small delay to be polite
+                        await asyncio.sleep(0.5)
+
+                except Exception as e:
+                    logger.warning(f"Yale LUX search failed for '{concept.refined_concept}': {e}")
+                    continue
+
+        except Exception as e:
+            logger.error(f"Yale LUX artist discovery failed: {e}")
+
+        logger.info(f"Yale LUX: Total {len(all_artists)} artists discovered")
+        return all_artists
+
     async def _discover_related_artists(self, reference_artists: List[str]) -> List[Dict[str, Any]]:
         """
         Discover artists related to reference artists via Wikidata relationships
@@ -1165,6 +1301,39 @@ REASONING: [2-3 sentences explaining the relevance assessment]"""
 
     async def _find_artist_qid(self, artist_name: str) -> Optional[str]:
         """Find Wikidata QID for an artist by name"""
+        # Hardcoded QIDs for common reference artists (much faster)
+        ARTIST_QID_CACHE = {
+            'piet mondrian': 'Q151803',
+            'kazimir malevich': 'Q130777',
+            'josef albers': 'Q170177',
+            'wassily kandinsky': 'Q61064',
+            'paul klee': 'Q44007',
+            'mark rothko': 'Q152010',
+            'barnett newman': 'Q374398',
+            'clyfford still': 'Q579252',
+            'helen frankenthaler': 'Q235281',
+            'morris louis': 'Q711269',
+            'kenneth noland': 'Q709176',
+            'ellsworth kelly': 'Q544899',
+            'frank stella': 'Q375268',
+            'donald judd': 'Q378393',
+            'dan flavin': 'Q560184',
+            'sol lewitt': 'Q168474',
+            'agnes martin': 'Q235321',
+            'ad reinhardt': 'Q354398',
+            'yves klein': 'Q154324',
+            'theo van doesburg': 'Q157467',
+            'georges vantongerloo': 'Q708459',
+            'vilmos huszár': 'Q2162032',
+            'robert motherwell': 'Q165275',
+            'jackson pollock': 'Q37571',
+        }
+
+        name_lower = artist_name.lower().strip()
+        if name_lower in ARTIST_QID_CACHE:
+            return ARTIST_QID_CACHE[name_lower]
+
+        # Otherwise do a simple label search
         query = f"""
         PREFIX wd: <http://www.wikidata.org/entity/>
         PREFIX wdt: <http://www.wikidata.org/prop/direct/>

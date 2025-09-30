@@ -1,117 +1,81 @@
 """
-SIMPLIFIED TEST - Direct Wikidata query for Impressionists with diversity data
+Test the simple artist discovery approach
 """
 import asyncio
-import httpx
+import logging
+import sys
+import os
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from backend.agents.artist_discovery_simple import SimpleArtistDiscovery
+from backend.models import RefinedTheme, ValidatedConcept
+from backend.clients.essential_data_client import EssentialDataClient
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
-async def test_simple_impressionist_discovery():
-    """Test with known working query - Impressionism"""
+async def test_simple_discovery():
+    """Test simple Wikipedia-based discovery"""
 
-    print("=" * 80)
-    print("SIMPLE TEST: Get Impressionist Artists with Gender Data")
-    print("=" * 80)
+    # Create a realistic theme
+    theme = RefinedTheme(
+        refined_title="Color, Form, and Space in Contemporary Abstraction",
+        validated_concepts=[
+            ValidatedConcept(
+                refined_concept="De Stijl",
+                confidence_score=0.8,
+                wikipedia_uris=[]
+            ),
+            ValidatedConcept(
+                refined_concept="Color Field Painting",
+                confidence_score=0.7,
+                wikipedia_uris=[]
+            ),
+            ValidatedConcept(
+                refined_concept="Minimalism",
+                confidence_score=0.7,
+                wikipedia_uris=[]
+            ),
+        ],
+        scholarly_context="Abstract art movements",
+        recommended_periods=["20th century", "contemporary"],
+        key_themes=["abstraction", "color", "form"]
+    )
 
-    # Very simple query - just get Impressionists
-    query = """
-    PREFIX wd: <http://www.wikidata.org/entity/>
-    PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+    reference_artists = ["Piet Mondrian", "Kazimir Malevich", "Josef Albers"]
 
-    SELECT DISTINCT ?artist ?artistLabel ?genderLabel ?nationalityLabel ?birth ?death WHERE {
-      ?artist wdt:P106 wd:Q1028181 .  # Occupation: painter
-      ?artist wdt:P135 wd:Q40415 .    # Movement: Impressionism
+    async with EssentialDataClient() as client:
+        discoverer = SimpleArtistDiscovery(client)
 
-      OPTIONAL { ?artist wdt:P21 ?gender }
-      OPTIONAL { ?artist wdt:P27 ?nationality }
-      OPTIONAL { ?artist wdt:P569 ?birth }
-      OPTIONAL { ?artist wdt:P570 ?death }
+        logger.info("=" * 100)
+        logger.info("TESTING SIMPLE ARTIST DISCOVERY")
+        logger.info("=" * 100)
 
-      SERVICE wikibase:label { bd:serviceParam wikibase:language "en" }
-    }
-    LIMIT 20
-    """
-
-    print("\n🔍 Executing SPARQL query...")
-
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        response = await client.post(
-            "https://query.wikidata.org/sparql",
-            data={'query': query, 'format': 'json'},
-            headers={
-                'Accept': 'application/sparql-results+json',
-                'User-Agent': 'AICuratorTest/1.0'
-            }
+        artists = await discoverer.discover_artists(
+            refined_theme=theme,
+            reference_artists=reference_artists,
+            max_artists=20
         )
 
-        if response.status_code == 200:
-            data = response.json()
-            results = data.get('results', {}).get('bindings', [])
+        logger.info(f"\n{'=' * 100}")
+        logger.info(f"RESULTS: Found {len(artists)} artists")
+        logger.info("=" * 100)
 
-            print(f"\n✅ SUCCESS! Found {len(results)} Impressionist artists\n")
+        for i, artist in enumerate(artists[:15], 1):
+            logger.info(f"\n{i}. {artist['name']}")
+            if artist.get('birth_year'):
+                lifespan = f"{artist['birth_year']}"
+                if artist.get('death_year'):
+                    lifespan += f"-{artist['death_year']}"
+                logger.info(f"   {lifespan}")
+            logger.info(f"   {artist['description'][:150]}...")
 
-            # Analyze diversity
-            female_count = 0
-            male_count = 0
-            unknown_gender = 0
-
-            nationalities = {}
-
-            for r in results:
-                name = r.get('artistLabel', {}).get('value', 'Unknown')
-                gender = r.get('genderLabel', {}).get('value', 'unknown')
-                nationality = r.get('nationalityLabel', {}).get('value', 'Unknown')
-                birth = r.get('birth', {}).get('value', '')[:4] or '?'
-                death = r.get('death', {}).get('value', '')[:4] or '?'
-
-                # Count gender
-                if 'female' in gender.lower():
-                    female_count += 1
-                    gender_icon = "👩"
-                elif 'male' in gender.lower():
-                    male_count += 1
-                    gender_icon = "👨"
-                else:
-                    unknown_gender += 1
-                    gender_icon = "❓"
-
-                # Count nationalities
-                nationalities[nationality] = nationalities.get(nationality, 0) + 1
-
-                print(f"{gender_icon} {name} ({birth}-{death})")
-                print(f"   Gender: {gender}, Nationality: {nationality}\n")
-
-            # Summary
-            print("=" * 80)
-            print("DIVERSITY SUMMARY")
-            print("=" * 80)
-
-            total = len(results)
-            print(f"\n👥 Gender Distribution:")
-            print(f"   Female: {female_count} ({female_count/total*100:.1f}%)")
-            print(f"   Male: {male_count} ({male_count/total*100:.1f}%)")
-            print(f"   Unknown: {unknown_gender} ({unknown_gender/total*100:.1f}%)")
-
-            print(f"\n🌍 Geographic Distribution:")
-            for nat, count in sorted(nationalities.items(), key=lambda x: -x[1])[:5]:
-                print(f"   {nat}: {count} artist{'s' if count > 1 else ''}")
-
-            print("\n" + "=" * 80)
-            print("✅ PROOF: We CAN get real gender + nationality data from Wikidata!")
-            print("=" * 80)
-
-            return results
-
-        else:
-            print(f"❌ Query failed: {response.status_code}")
-            print(f"Response: {response.text[:500]}")
-            return None
+        logger.info(f"\n{'=' * 100}")
+        logger.info(f"✓ Simple discovery found {len(artists)} artists!")
+        logger.info("=" * 100)
 
 
 if __name__ == "__main__":
-    print("\n🎨 Testing Simple Artist Discovery with Real Wikidata\n")
-    results = asyncio.run(test_simple_impressionist_discovery())
-
-    if results:
-        print(f"\n✨ Successfully retrieved {len(results)} artists with diversity data!")
-    else:
-        print("\n⚠️  Test failed")
+    asyncio.run(test_simple_discovery())
