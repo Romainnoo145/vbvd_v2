@@ -13,13 +13,14 @@ import os
 
 # Optional dependency - gracefully handle if not installed
 try:
-    import anthropic
-    ANTHROPIC_AVAILABLE = True
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
 except ImportError:
-    ANTHROPIC_AVAILABLE = False
-    anthropic = None
+    OPENAI_AVAILABLE = False
+    OpenAI = None
 
 from backend.clients.essential_data_client import EssentialDataClient
+from backend.clients.artic_client import ArticClient
 from backend.models import ArtworkCandidate, DiscoveredArtist
 from backend.agents.theme_refinement_agent import RefinedTheme
 
@@ -28,12 +29,14 @@ logger = logging.getLogger(__name__)
 
 class ArtworkSearchQuery(BaseModel):
     """Query structure for artwork discovery"""
-    query_type: str  # "yale_lux", "wikidata", "iiif"
+    query_type: str  # "yale_lux", "wikidata", "artic", "iiif"
     sparql: Optional[str] = None
     endpoint_params: Optional[Dict[str, Any]] = None
     artist_uri: Optional[str] = None
     artist_name: str
     theme_concept: Optional[str] = None
+    date_start: Optional[int] = None
+    date_end: Optional[int] = None
 
 
 class ArtworkDiscoveryAgent:
@@ -51,19 +54,19 @@ class ArtworkDiscoveryAgent:
     8. Output: Curated list of ArtworkCandidate objects for exhibition
     """
 
-    def __init__(self, data_client: EssentialDataClient, anthropic_api_key: Optional[str] = None):
+    def __init__(self, data_client: EssentialDataClient, openai_api_key: Optional[str] = None):
         self.data_client = data_client
         self.agent_version = "1.0"
 
-        # Initialize Anthropic client for LLM-based relevance scoring
-        if not ANTHROPIC_AVAILABLE:
-            logger.warning("Anthropic SDK not installed - using heuristic scoring only")
-            self.anthropic_client = None
+        # Initialize OpenAI client for LLM-based relevance scoring
+        if not OPENAI_AVAILABLE:
+            logger.warning("OpenAI SDK not installed - using heuristic scoring only")
+            self.openai_client = None
         else:
-            api_key = anthropic_api_key or os.getenv('ANTHROPIC_API_KEY')
+            api_key = openai_api_key or os.getenv('OPENAI_API_KEY')
             if not api_key:
-                logger.warning("No Anthropic API key provided - LLM scoring will be limited")
-            self.anthropic_client = anthropic.Anthropic(api_key=api_key) if api_key else None
+                logger.warning("No OpenAI API key provided - LLM scoring will be limited")
+            self.openai_client = OpenAI(api_key=api_key) if api_key else None
 
     async def discover_artworks(
         self,
@@ -173,6 +176,25 @@ class ArtworkDiscoveryAgent:
                     artist_name=artist.name
                 ))
 
+            # Query 3: Art Institute of Chicago for modern art (1880-present)
+            # Only search for artists working in modern period
+            if artist.birth_year and artist.birth_year >= 1850:
+                queries.append(ArtworkSearchQuery(
+                    query_type="artic",
+                    artist_name=artist.name,
+                    artist_uri=artist.uri,
+                    date_start=1880,
+                    date_end=2025
+                ))
+
+            # Query 4: Europeana for European cultural heritage (all periods)
+            # 58M+ items with IIIF support
+            queries.append(ArtworkSearchQuery(
+                query_type="europeana",
+                artist_name=artist.name,
+                artist_uri=artist.uri
+            ))
+
         logger.info(f"Built {len(queries)} artwork discovery queries for {len(artists)} artists")
         return queries
 
@@ -241,6 +263,10 @@ class ArtworkDiscoveryAgent:
                 tasks.append(self._execute_yale_lux_query(query))
             elif query.query_type == "wikidata":
                 tasks.append(self._execute_wikidata_artwork_query(query))
+            elif query.query_type == "artic":
+                tasks.append(self._execute_artic_query(query))
+            elif query.query_type == "europeana":
+                tasks.append(self._execute_europeana_query(query))
 
         # Execute in parallel
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -499,6 +525,203 @@ class ArtworkDiscoveryAgent:
 
         except Exception as e:
             logger.error(f"Error executing Wikidata query: {e}", exc_info=True)
+            return []
+
+    async def _execute_artic_query(
+        self,
+        query: ArtworkSearchQuery
+    ) -> List[Dict[str, Any]]:
+        """Execute Art Institute of Chicago API query for artworks"""
+        try:
+            async with ArticClient(timeout=30.0) as artic_client:
+                artworks_data = await artic_client.search_by_artist(
+                    artist_name=query.artist_name,
+                    date_start=query.date_start,
+                    date_end=query.date_end,
+                    limit=20
+                )
+
+                artworks = []
+                for artwork in artworks_data:
+                    # Convert Art Institute format to our standard format
+                    artwork_data = {
+                        'source': 'artic',
+                        'artist_name': query.artist_name,
+                        'artist_uri': query.artist_uri,
+                        'uri': f"https://www.artic.edu/artworks/{artwork['id']}",
+                        'artic_id': artwork['id'],
+                        'title': artwork.get('title', 'Untitled'),
+                    }
+
+                    # Add artist display (may include birth/death years, nationality)
+                    if artwork.get('artist_display'):
+                        artwork_data['artist_display'] = artwork['artist_display']
+
+                    # Date information
+                    if artwork.get('date_display'):
+                        artwork_data['date_created'] = artwork['date_display']
+
+                    if artwork.get('date_start'):
+                        artwork_data['date_created_earliest'] = artwork['date_start']
+
+                    if artwork.get('date_end'):
+                        artwork_data['date_created_latest'] = artwork['date_end']
+
+                    # Medium and technique
+                    if artwork.get('medium_display'):
+                        artwork_data['medium'] = artwork['medium_display']
+
+                    # Classification
+                    if artwork.get('classification_title'):
+                        artwork_data['artwork_type'] = artwork['classification_title']
+
+                    if artwork.get('artwork_type_title'):
+                        artwork_data['style'] = artwork['artwork_type_title']
+
+                    # Department (can use as institution)
+                    if artwork.get('department_title'):
+                        artwork_data['institution_name'] = f"Art Institute of Chicago - {artwork['department_title']}"
+                    else:
+                        artwork_data['institution_name'] = "Art Institute of Chicago"
+
+                    # Place of origin
+                    if artwork.get('place_of_origin'):
+                        artwork_data['place_of_origin'] = artwork['place_of_origin']
+
+                    # Dimensions
+                    if artwork.get('dimensions_detail'):
+                        dims = artwork['dimensions_detail']
+                        for dim in dims:
+                            if dim.get('elementName') == 'Overall':
+                                measurements = dim.get('elementMeasurements', {})
+                                if 'Height' in measurements:
+                                    artwork_data['height_cm'] = measurements['Height']
+                                if 'Width' in measurements:
+                                    artwork_data['width_cm'] = measurements['Width']
+                                if 'Depth' in measurements:
+                                    artwork_data['depth_cm'] = measurements['Depth']
+                                break
+
+                    # Images - IIIF support!
+                    if artwork.get('iiif_url'):
+                        # Use IIIF manifest construction
+                        image_id = artwork.get('image_id')
+                        if image_id:
+                            # Art Institute uses IIIF Image API 2.0
+                            artwork_data['high_res_images'] = [artwork['iiif_url']]
+                            artwork_data['thumbnail_url'] = artwork.get('thumbnail_iiif_url', artwork['iiif_url'])
+                            artwork_data['iiif_image_id'] = image_id
+
+                    # Copyright and permissions
+                    if artwork.get('copyright_notice'):
+                        artwork_data['copyright_status'] = artwork['copyright_notice']
+
+                    if artwork.get('is_public_domain'):
+                        artwork_data['reproduction_rights'] = 'Public Domain' if artwork['is_public_domain'] else 'Rights Reserved'
+
+                    # Description
+                    if artwork.get('short_description'):
+                        artwork_data['description'] = artwork['short_description']
+                    elif artwork.get('description'):
+                        artwork_data['description'] = artwork['description']
+
+                    # Gallery location
+                    if artwork.get('gallery_title'):
+                        artwork_data['current_location'] = artwork['gallery_title']
+                    elif artwork.get('on_loan_display'):
+                        artwork_data['current_location'] = artwork['on_loan_display']
+
+                    # Credit line (provenance info)
+                    if artwork.get('credit_line'):
+                        artwork_data['provenance'] = [artwork['credit_line']]
+
+                    artworks.append(artwork_data)
+
+                logger.info(f"Art Institute API returned {len(artworks)} artworks for {query.artist_name}")
+                return artworks
+
+        except Exception as e:
+            logger.error(f"Error executing Art Institute query: {e}", exc_info=True)
+            return []
+
+    async def _execute_europeana_query(
+        self,
+        query: ArtworkSearchQuery
+    ) -> List[Dict[str, Any]]:
+        """Execute Europeana API query for artworks - 58M+ European cultural heritage items"""
+        try:
+            async with EssentialDataClient(timeout=30.0) as client:
+                # Use the new Europeana search method
+                results = await client._search_europeana(
+                    query=query.artist_name,
+                    context='artwork painting'
+                )
+
+                artworks = []
+                for item in results:
+                    # Convert Europeana format to our standard format
+                    artwork_data = {
+                        'source': 'europeana',
+                        'artist_name': query.artist_name,
+                        'artist_uri': query.artist_uri,
+                        'uri': item.get('url', ''),
+                        'europeana_id': item.get('id', ''),
+                        'title': item.get('title', 'Untitled'),
+                    }
+
+                    # Artist information
+                    if item.get('artist_name'):
+                        artwork_data['artist_display'] = item['artist_name']
+
+                    # Date information
+                    if item.get('date'):
+                        artwork_data['date_created'] = item['date']
+
+                    # Description
+                    if item.get('description'):
+                        artwork_data['description'] = item['description']
+
+                    # Institution/collection
+                    if item.get('data_provider'):
+                        artwork_data['institution_name'] = item['data_provider']
+
+                    # Country
+                    if item.get('country'):
+                        artwork_data['place_of_origin'] = item['country']
+
+                    # Images - regular and thumbnail
+                    if item.get('image_url'):
+                        artwork_data['high_res_images'] = [item['image_url']]
+
+                    if item.get('thumbnail_url'):
+                        artwork_data['thumbnail_url'] = item['thumbnail_url']
+
+                    # IIIF Manifest - KEY FOR DISPLAY!
+                    if item.get('iiif_manifest'):
+                        artwork_data['iiif_manifest'] = item['iiif_manifest']
+                        logger.debug(f"Found IIIF manifest for {artwork_data['title']}")
+
+                    # Rights information
+                    if item.get('rights'):
+                        artwork_data['copyright_status'] = item['rights']
+                        # Check if it's open access
+                        if 'open' in item['rights'].lower() or 'public' in item['rights'].lower():
+                            artwork_data['reproduction_rights'] = 'Open Access'
+                        else:
+                            artwork_data['reproduction_rights'] = 'Rights Reserved'
+
+                    # Type of artwork
+                    if item.get('type'):
+                        artwork_data['artwork_type'] = item['type']
+
+                    artworks.append(artwork_data)
+
+                logger.info(f"Europeana API returned {len(artworks)} artworks for {query.artist_name}, "
+                           f"{sum(1 for a in artworks if a.get('iiif_manifest'))} with IIIF")
+                return artworks
+
+        except Exception as e:
+            logger.error(f"Error executing Europeana query: {e}", exc_info=True)
             return []
 
     def _merge_artwork_records(
@@ -823,11 +1046,11 @@ class ArtworkDiscoveryAgent:
         Returns:
             Tuple of (relevance_score, reasoning_text)
         """
-        if not self.anthropic_client:
+        if not self.openai_client:
             return self._heuristic_artwork_relevance(artwork, theme, artist_relevance_map)
 
         try:
-            # Use Claude to analyze relevance
+            # Use GPT to analyze relevance
             prompt = f"""You are an expert curator evaluating artworks for an exhibition.
 
 Exhibition Theme: {theme.exhibition_title}
@@ -857,13 +1080,14 @@ Format your response as:
 SCORE: [number between 0.0 and 1.0]
 REASONING: [2-3 sentences explaining the relevance assessment]"""
 
-            message = self.anthropic_client.messages.create(
-                model="claude-3-5-sonnet-20241022",
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4-turbo-preview",
                 max_tokens=500,
+                temperature=0.3,
                 messages=[{"role": "user", "content": prompt}]
             )
 
-            response_text = message.content[0].text
+            response_text = response.choices[0].message.content
 
             # Parse response
             score = 0.5  # Default

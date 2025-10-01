@@ -154,6 +154,9 @@ class EssentialDataConfig:
         elif service == 'yale_lux':
             headers['Accept'] = 'application/ld+json;profile="https://linked.art/ns/v1/linked-art.json"'
 
+        elif service == 'europeana':
+            headers['Accept'] = 'application/json'
+
         return headers
 
     @staticmethod

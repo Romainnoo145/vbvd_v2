@@ -102,7 +102,7 @@ class OrchestratorAgent:
     def __init__(
         self,
         data_client: EssentialDataClient,
-        anthropic_api_key: Optional[str] = None,
+        openai_api_key: Optional[str] = None,
         progress_callback: Optional[Callable[[PipelineStatus], None]] = None,
         session_manager: Optional[Any] = None  # SessionManager for interactive mode
     ):
@@ -112,7 +112,7 @@ class OrchestratorAgent:
 
         # Initialize stage agents
         self.theme_agent = ThemeRefinementAgent(data_client)
-        self.artwork_agent = ArtworkDiscoveryAgent(data_client, anthropic_api_key)
+        self.artwork_agent = ArtworkDiscoveryAgent(data_client, openai_api_key)
         self.enrichment_agent = ArtworkEnrichmentAgent()
         # Note: We create SimpleArtistDiscovery per-pipeline for better reliability
 

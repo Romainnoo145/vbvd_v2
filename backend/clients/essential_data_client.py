@@ -41,7 +41,7 @@ class EssentialDataClient:
                               sources: List[str],
                               context: str = "art") -> Dict[str, List[Dict]]:
         """
-        Search essential sources - Wikipedia, Wikidata, Getty, Yale LUX, Brave
+        Search essential sources - Wikipedia, Wikidata, Getty, Yale LUX, Brave, Europeana
 
         Args:
             query: Search query
@@ -66,6 +66,8 @@ class EssentialDataClient:
                 tasks.append(self._search_yale_lux(query, context))
             elif source == 'brave_search':
                 tasks.append(self._search_brave(query, context))
+            elif source == 'europeana':
+                tasks.append(self._search_europeana(query, context))
             else:
                 logger.warning(f"Unknown source: {source}")
 
@@ -497,6 +499,105 @@ LIMIT 10
             logger.error(f"Brave search failed: {e}")
             return []
 
+    async def _search_europeana(self, query: str, context: str) -> List[Dict]:
+        """
+        Search Europeana - 58M+ cultural heritage items with IIIF support
+        """
+        api_key = self.config.get_api_key('europeana')
+        if not api_key:
+            logger.warning("Europeana API key not configured")
+            return []
+
+        try:
+            search_url = "https://api.europeana.eu/record/v2/search.json"
+
+            # Build search query based on context
+            # Don't filter by IIIF - get all results, IIIF manifests extracted when available
+            if 'artist' in context.lower() or 'person' in context.lower():
+                # Search by artist name
+                search_query = f'who:"{query}" AND TYPE:IMAGE'
+            else:
+                # General artwork search
+                search_query = f'"{query}" AND TYPE:IMAGE'
+
+            params = {
+                'wskey': api_key,
+                'query': search_query,
+                'rows': 20,
+                'profile': 'rich',  # Get full metadata including IIIF
+                'reusability': 'open,restricted',  # Include all available items
+                'media': 'true',  # Only items with media
+                'thumbnail': 'true'
+            }
+
+            headers = self.config.get_headers('europeana')
+            response = await self.client.get(search_url, params=params, headers=headers)
+
+            if response.status_code == 200:
+                data = response.json()
+                results = []
+
+                for item in data.get('items', []):
+                    europeana_id = item.get('id', '')
+                    result = {
+                        'id': europeana_id,
+                        'title': item.get('title', ['Untitled'])[0] if isinstance(item.get('title'), list) else item.get('title', 'Untitled'),
+                        'source': 'europeana',
+                        'type': item.get('type', ''),
+                        'url': f"https://www.europeana.eu{europeana_id}",
+                        'data_provider': item.get('dataProvider', [''])[0] if isinstance(item.get('dataProvider'), list) else item.get('dataProvider', ''),
+                        'country': item.get('country', [''])[0] if isinstance(item.get('country'), list) else item.get('country', '')
+                    }
+
+                    # Construct IIIF Manifest URL from Europeana ID
+                    # Format: https://iiif.europeana.eu/presentation/{record-id}/manifest
+                    if europeana_id:
+                        # Remove leading slash if present
+                        record_id = europeana_id.lstrip('/')
+                        result['iiif_manifest'] = f"https://iiif.europeana.eu/presentation/{record_id}/manifest"
+
+                    # Extract creator/artist
+                    if 'dcCreator' in item:
+                        creators = item['dcCreator']
+                        result['artist_name'] = creators[0] if isinstance(creators, list) else creators
+
+                    # Extract date
+                    if 'year' in item:
+                        result['date'] = item['year'][0] if isinstance(item['year'], list) else item['year']
+
+                    # Extract image URLs
+                    if 'edmIsShownBy' in item:
+                        result['image_url'] = item['edmIsShownBy'][0] if isinstance(item['edmIsShownBy'], list) else item['edmIsShownBy']
+
+                    # Thumbnail
+                    if 'edmPreview' in item:
+                        result['thumbnail_url'] = item['edmPreview'][0] if isinstance(item['edmPreview'], list) else item['edmPreview']
+
+                    # Rights information
+                    if 'rights' in item:
+                        result['rights'] = item['rights'][0] if isinstance(item['rights'], list) else item['rights']
+
+                    # Description
+                    if 'dcDescription' in item:
+                        desc = item['dcDescription']
+                        result['description'] = desc[0] if isinstance(desc, list) else desc
+
+                    results.append(result)
+
+                logger.info(f"Europeana: Found {len(results)} items, {sum(1 for r in results if r.get('iiif_manifest'))} with IIIF")
+                return results
+
+            elif response.status_code == 401:
+                logger.error("Europeana API authentication failed - check API key")
+                return []
+            else:
+                logger.error(f"Europeana search failed with status {response.status_code}")
+                return []
+
+        except Exception as e:
+            logger.error(f"Europeana search failed: {e}")
+            return []
+
     def deduplicate_results(self, results: Dict[str, List[Dict]]) -> Dict[str, List[Dict]]:
         """
         Remove duplicate results across sources based on title similarity
@@ -524,6 +625,10 @@ async def search_all_sources(query: str, context: str = "art") -> Dict[str, List
         # Add Brave if API key is available
         if data_config.get_api_key('brave_search'):
             sources.append('brave_search')
+
+        # Add Europeana if API key is available
+        if data_config.get_api_key('europeana'):
+            sources.append('europeana')
 
         return await client.search_essential(query, sources, context)
 
