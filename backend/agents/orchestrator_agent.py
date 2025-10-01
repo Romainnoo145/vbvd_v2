@@ -110,8 +110,8 @@ class OrchestratorAgent:
         self.progress_callback = progress_callback
         self.session_manager = session_manager
 
-        # Initialize stage agents
-        self.theme_agent = ThemeRefinementAgent(data_client)
+        # Initialize stage agents with OpenAI support
+        self.theme_agent = ThemeRefinementAgent(data_client, openai_api_key)
         self.artwork_agent = ArtworkDiscoveryAgent(data_client, openai_api_key)
         self.enrichment_agent = ArtworkEnrichmentAgent()
         # Note: We create SimpleArtistDiscovery per-pipeline for better reliability

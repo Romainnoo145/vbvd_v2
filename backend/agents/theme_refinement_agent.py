@@ -5,10 +5,19 @@ Transforms rough curator input into professional exhibition themes with scholarl
 
 import asyncio
 import logging
+import os
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 from dataclasses import dataclass
 from pydantic import BaseModel, Field
+
+# Optional OpenAI dependency for LLM-enhanced theme generation
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    OpenAI = None
 
 from backend.clients.essential_data_client import EssentialDataClient
 from backend.models import CuratorBrief, EnrichedQuery
@@ -85,10 +94,20 @@ class ThemeRefinementAgent:
     5. Output refined theme ready for Stage 2 (Artist Discovery)
     """
 
-    def __init__(self, data_client: EssentialDataClient):
+    def __init__(self, data_client: EssentialDataClient, openai_api_key: Optional[str] = None):
         self.data_client = data_client
         self.validator = CuratorInputValidator(data_client)
         self.agent_version = "1.0"
+
+        # Initialize OpenAI client for LLM-enhanced theme generation
+        if not OPENAI_AVAILABLE:
+            logger.warning("OpenAI SDK not installed - using template-based generation")
+            self.openai_client = None
+        else:
+            api_key = openai_api_key or os.getenv('OPENAI_API_KEY')
+            if not api_key:
+                logger.warning("No OpenAI API key provided - theme generation will use templates")
+            self.openai_client = OpenAI(api_key=api_key) if api_key else None
 
     async def refine_theme(self, brief: CuratorBrief, session_id: str) -> RefinedTheme:
         """
@@ -509,8 +528,20 @@ class ThemeRefinementAgent:
         return discourse
 
     async def _generate_exhibition_title(self, brief: CuratorBrief, validations: List[ConceptValidation], research: ThemeResearch) -> Tuple[str, Optional[str]]:
-        """Generate compelling exhibition title and subtitle"""
+        """Generate compelling exhibition title and subtitle using LLM or templates"""
 
+        # Try LLM-based generation first
+        if self.openai_client:
+            try:
+                return await self._generate_title_with_llm(brief, validations, research)
+            except Exception as e:
+                logger.warning(f"LLM title generation failed: {e}, falling back to templates")
+
+        # Fallback to template-based generation
+        return self._generate_title_with_templates(brief, validations)
+
+    def _generate_title_with_templates(self, brief: CuratorBrief, validations: List[ConceptValidation]) -> Tuple[str, Optional[str]]:
+        """Template-based title generation (fallback)"""
         # Extract key elements
         primary_concepts = [v.refined_concept for v in validations if v.confidence_score > 0.7]
         if not primary_concepts:
@@ -548,9 +579,87 @@ class ThemeRefinementAgent:
 
         return title, subtitle
 
-    async def _generate_curatorial_statement(self, brief: CuratorBrief, validations: List[ConceptValidation], research: ThemeResearch) -> str:
-        """Generate professional curatorial statement"""
+    async def _generate_title_with_llm(self, brief: CuratorBrief, validations: List[ConceptValidation], research: ThemeResearch) -> Tuple[str, Optional[str]]:
+        """Generate exhibition title using OpenAI GPT-4"""
 
+        # Build context for LLM
+        concepts_str = ', '.join([v.refined_concept for v in validations[:5]])
+        artists_str = ', '.join(brief.reference_artists[:3]) if brief.reference_artists else "Various artists"
+
+        prompt = f"""You are a curator at Museum Van Bommel Van Dam, a leading modern art museum in the Netherlands known for its focus on contemporary and 20th-century art, particularly abstract and conceptual movements.
+
+Your museum's identity:
+- Focus: Modern and contemporary art (1900-present)
+- Specialty: Abstract art, geometric abstraction, conceptualism
+- Audience: Art enthusiasts, collectors, and general public in the Netherlands and Belgium
+- Voice: Direct, intellectually engaging, avoiding pretension
+- Philosophy: Making modern art accessible while maintaining scholarly rigor
+
+Create an exhibition title that reflects Van Bommel Van Dam's curatorial voice.
+
+Exhibition Brief:
+- Theme: {brief.theme_title}
+- Key Concepts: {concepts_str}
+- Featured Artists: {artists_str}
+- Target Audience: {brief.target_audience}
+- Duration: {brief.duration_weeks} weeks
+
+Art Historical Context:
+{research.art_historical_context[:300]}
+
+Requirements:
+1. Title must feel contemporary and fresh, not academic or stuffy
+2. Maximum 50 characters for main title (shorter is better!)
+3. Subtitle should add clarity and intrigue
+4. Use direct, engaging language appropriate for a modern art museum
+5. Avoid clichés like "Journey Through", "Exploring", "Rediscovering"
+6. Consider that many visitors are Dutch/Belgian - avoid overly complex English
+7. Think: What would catch attention in a museum newsletter or Instagram post?
+
+Format your response EXACTLY as:
+TITLE: [exhibition title]
+SUBTITLE: [subtitle or NONE if not needed]"""
+
+        response = self.openai_client.chat.completions.create(
+            model="gpt-4-turbo-preview",
+            max_tokens=200,
+            temperature=0.7,  # Slightly creative for titles
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        response_text = response.choices[0].message.content.strip()
+
+        # Parse response
+        title = brief.theme_title  # fallback
+        subtitle = None
+
+        if "TITLE:" in response_text:
+            title_line = response_text.split("TITLE:")[1].split("\n")[0].strip()
+            title = title_line if title_line else brief.theme_title
+
+        if "SUBTITLE:" in response_text:
+            subtitle_line = response_text.split("SUBTITLE:")[1].split("\n")[0].strip()
+            if subtitle_line and subtitle_line.upper() != "NONE":
+                subtitle = subtitle_line
+
+        logger.info(f"LLM generated title: '{title}' / subtitle: '{subtitle}'")
+        return title, subtitle
+
+    async def _generate_curatorial_statement(self, brief: CuratorBrief, validations: List[ConceptValidation], research: ThemeResearch) -> str:
+        """Generate professional curatorial statement using LLM or templates"""
+
+        # Try LLM-based generation first
+        if self.openai_client:
+            try:
+                return await self._generate_statement_with_llm(brief, validations, research)
+            except Exception as e:
+                logger.warning(f"LLM statement generation failed: {e}, falling back to templates")
+
+        # Fallback to template-based generation
+        return self._generate_statement_with_templates(brief, validations, research)
+
+    def _generate_statement_with_templates(self, brief: CuratorBrief, validations: List[ConceptValidation], research: ThemeResearch) -> str:
+        """Template-based curatorial statement (fallback)"""
         # Start with strong opening
         statement = f"This exhibition presents a comprehensive examination of {brief.theme_title.lower()}, "
 
@@ -577,9 +686,77 @@ class ThemeRefinementAgent:
 
         return statement
 
-    async def _generate_scholarly_rationale(self, brief: CuratorBrief, research: ThemeResearch) -> str:
-        """Generate scholarly rationale for the exhibition"""
+    async def _generate_statement_with_llm(self, brief: CuratorBrief, validations: List[ConceptValidation], research: ThemeResearch) -> str:
+        """Generate curatorial statement using OpenAI GPT-4"""
 
+        # Build rich context for LLM
+        concepts_str = ', '.join([v.refined_concept for v in validations[:5]])
+        artists_str = ', '.join(brief.reference_artists[:5]) if brief.reference_artists else "various artists"
+
+        prompt = f"""You are writing a curatorial statement for Museum Van Bommel Van Dam, a modern art museum in the Netherlands.
+
+Museum Van Bommel Van Dam's Curatorial Philosophy:
+- We champion modern and contemporary art that challenges conventional seeing
+- We connect historical avant-garde movements to contemporary practice
+- We believe abstract art reveals essential truths about form, color, and space
+- We make intellectual content accessible without dumbing down
+- We address both serious collectors and curious visitors
+- Our voice is confident, direct, and passionate about modern art
+
+Write a curatorial statement that embodies this philosophy.
+
+Exhibition Details:
+- Theme: {brief.theme_title}
+- Key Concepts: {concepts_str}
+- Featured Artists: {artists_str}
+- Target Audience: {brief.target_audience}
+- Duration: {brief.duration_weeks} weeks
+
+Art Historical Context:
+{research.art_historical_context}
+
+Current Discourse:
+{research.current_discourse[:200]}
+
+Requirements:
+1. Write 200-250 words in an engaging, direct voice
+2. Start strong - capture attention immediately
+3. Explain why THIS exhibition at THIS moment matters
+4. Connect historical movements to contemporary relevance
+5. Use "we" and "our" - speak as the museum
+6. Avoid academic jargon while maintaining intellectual depth
+7. No clichés like "invites viewers to explore" or "takes us on a journey"
+8. End with what visitors will experience/discover
+9. Think: This will be read by collectors, art students, and curious locals
+
+Write the curatorial statement for Museum Van Bommel Van Dam:"""
+
+        response = self.openai_client.chat.completions.create(
+            model="gpt-4-turbo-preview",
+            max_tokens=400,
+            temperature=0.5,  # Balanced creativity and precision
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        statement = response.choices[0].message.content.strip()
+        logger.info(f"LLM generated curatorial statement ({len(statement)} chars)")
+        return statement
+
+    async def _generate_scholarly_rationale(self, brief: CuratorBrief, research: ThemeResearch) -> str:
+        """Generate scholarly rationale using LLM or templates"""
+
+        # Try LLM-based generation first
+        if self.openai_client:
+            try:
+                return await self._generate_rationale_with_llm(brief, research)
+            except Exception as e:
+                logger.warning(f"LLM rationale generation failed: {e}, falling back to templates")
+
+        # Fallback to template-based generation
+        return self._generate_rationale_with_templates(brief, research)
+
+    def _generate_rationale_with_templates(self, brief: CuratorBrief, research: ThemeResearch) -> str:
+        """Template-based scholarly rationale (fallback)"""
         rationale = f"The scholarly foundation for this exhibition rests upon {research.scholarly_background} "
 
         # Add methodological approach
@@ -592,6 +769,58 @@ class ThemeRefinementAgent:
         # Add contribution to field
         rationale += "This exhibition contributes to contemporary art historical discourse by offering new perspectives on familiar material while introducing lesser-known works that expand our understanding of the period and its cultural significance."
 
+        return rationale
+
+    async def _generate_rationale_with_llm(self, brief: CuratorBrief, research: ThemeResearch) -> str:
+        """Generate scholarly rationale using OpenAI GPT-4"""
+
+        prompt = f"""You are the chief curator at Museum Van Bommel Van Dam writing the scholarly rationale for an exhibition proposal. This document will be read by the museum board, potential lenders, and academic peers.
+
+Museum Van Bommel Van Dam's Scholarly Positioning:
+- We are a research-focused institution specializing in modern and contemporary art
+- We have particular expertise in geometric abstraction, De Stijl, and Dutch modernism
+- We contribute to international discourse on abstract art and its contemporary relevance
+- We balance rigorous scholarship with public accessibility
+- We are known for discovering overlooked connections between historical and contemporary practice
+
+Write a scholarly rationale that positions this exhibition within our museum's mission and expertise.
+
+Exhibition Theme: {brief.theme_title}
+
+Art Historical Context:
+{research.art_historical_context}
+
+Scholarly Background:
+{research.scholarly_background}
+
+Key Developments:
+{', '.join(research.key_developments[:5]) if research.key_developments else 'Various artistic developments'}
+
+Geographical Scope: {research.geographical_scope}
+Chronological Scope: {research.chronological_scope}
+
+Requirements:
+1. Write 150-200 words in scholarly but clear language
+2. Begin by establishing the exhibition's art historical significance
+3. Explain how this fits Museum Van Bommel Van Dam's collection strengths
+4. Justify the curatorial approach and methodology
+5. Mention potential loans or collection highlights we can leverage
+6. Address how this contributes to scholarship on modern art
+7. Reference recent developments in art historical discourse when relevant
+8. End with the exhibition's unique contribution to the field
+9. Write for an audience of museum professionals and art historians
+
+Write the scholarly rationale:"""
+
+        response = self.openai_client.chat.completions.create(
+            model="gpt-4-turbo-preview",
+            max_tokens=350,
+            temperature=0.3,  # More conservative for scholarly text
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        rationale = response.choices[0].message.content.strip()
+        logger.info(f"LLM generated scholarly rationale ({len(rationale)} chars)")
         return rationale
 
     def _analyze_theme_focus(self, validations: List[ConceptValidation]) -> Tuple[str, List[str]]:
