@@ -5,7 +5,7 @@ Manages Theme Refinement → Artist Discovery → Artwork Discovery with progres
 
 import asyncio
 import logging
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional, Callable, Tuple
 from datetime import datetime
 from enum import Enum
 from pydantic import BaseModel, Field
@@ -110,6 +110,16 @@ class OrchestratorAgent:
         self.progress_callback = progress_callback
         self.session_manager = session_manager
 
+        # Initialize OpenAI client for LLM-enhanced artist scoring
+        try:
+            from openai import OpenAI
+            import os
+            api_key = openai_api_key or os.getenv('OPENAI_API_KEY')
+            self.openai_client = OpenAI(api_key=api_key) if api_key else None
+        except ImportError:
+            logger.warning("OpenAI SDK not installed - artist scoring will use heuristics only")
+            self.openai_client = None
+
         # Initialize stage agents with OpenAI support
         self.theme_agent = ThemeRefinementAgent(data_client, openai_api_key)
         self.artwork_agent = ArtworkDiscoveryAgent(data_client, openai_api_key)
@@ -213,10 +223,10 @@ class OrchestratorAgent:
                     theme_concepts.append(str(c))
 
             for artist_data in raw_artists[:config['max_artists']]:
-                # Calculate relevance score using multi-factor scoring
-                relevance_score, relevance_reasoning = score_artist_relevance(
+                # Calculate relevance score using LLM (with heuristic fallback)
+                relevance_score, relevance_reasoning = await self._score_artist_with_llm(
                     artist_data=artist_data,
-                    theme_concepts=theme_concepts,
+                    refined_theme=refined_theme,
                     reference_artists=curator_brief.reference_artists
                 )
 
@@ -411,6 +421,108 @@ class OrchestratorAgent:
         )
 
         return proposal
+
+    async def _score_artist_with_llm(
+        self,
+        artist_data: Dict[str, Any],
+        refined_theme: RefinedTheme,
+        reference_artists: List[str]
+    ) -> Tuple[float, str]:
+        """
+        Score artist relevance using OpenAI GPT-4 with Museum Van Bommel Van Dam expertise
+
+        Returns:
+            (score, reasoning) tuple where score is 0.0-1.0
+        """
+        if not self.openai_client:
+            # Fallback to heuristic scoring
+            from backend.utils.relevance_scoring import score_artist_relevance
+            theme_concepts = [c.refined_concept for c in refined_theme.validated_concepts]
+            return score_artist_relevance(artist_data, theme_concepts, reference_artists)
+
+        try:
+            artist_name = artist_data.get('name', 'Unknown Artist')
+            artist_bio = artist_data.get('description', 'No description available')
+            birth_year = artist_data.get('birth_year', 'Unknown')
+            death_year = artist_data.get('death_year', 'Unknown')
+
+            # Build context
+            concepts_str = ', '.join([c.refined_concept for c in refined_theme.validated_concepts[:5]])
+            reference_str = ', '.join(reference_artists[:3]) if reference_artists else 'Various modern artists'
+
+            prompt = f"""You are a curator at Museum Van Bommel Van Dam evaluating artists for an exhibition.
+
+Museum Van Bommel Van Dam's Expertise:
+- We specialize in modern and contemporary art (1900-present)
+- Our collection strengths: geometric abstraction, De Stijl, Dutch modernism, conceptual art
+- We seek artists whose work challenges conventional seeing
+- We value both historical significance and contemporary relevance
+- We prioritize artists whose work connects to our collection and regional identity
+
+Exhibition Context:
+Title: {refined_theme.exhibition_title}
+Theme Concepts: {concepts_str}
+Reference Artists: {reference_str}
+Target Audience: {refined_theme.target_audience_refined}
+
+Artist to Evaluate:
+Name: {artist_name}
+Birth-Death: {birth_year} - {death_year}
+Biography: {artist_bio[:400]}
+
+Task:
+Evaluate this artist's relevance to OUR exhibition at Museum Van Bommel Van Dam.
+
+Consider:
+1. Does their work align with modern/contemporary art (our specialty)?
+2. Do they work in relevant movements/styles (abstract, geometric, conceptual)?
+3. Are they active in the right time period for this theme?
+4. Would their work complement our collection and exhibition goals?
+5. Is this a serious fine artist (not graphic designer, illustrator, etc.)?
+
+Be CRITICAL. Many candidates will be marginally relevant or wrong.
+- Score 0.0-0.3: Not relevant (wrong period, wrong medium, wrong style)
+- Score 0.4-0.6: Moderate relevance (some connection but not strong)
+- Score 0.7-0.9: Strong relevance (clear fit with theme and museum)
+- Score 0.9-1.0: Exceptional relevance (perfect fit, reference-quality artist)
+
+Format your response EXACTLY as:
+SCORE: [0.0 to 1.0]
+REASONING: [2-3 sentences explaining your evaluation]"""
+
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4-turbo-preview",
+                max_tokens=250,
+                temperature=0.3,  # Conservative for evaluation
+                messages=[{"role": "user", "content": prompt}]
+            )
+
+            response_text = response.choices[0].message.content.strip()
+
+            # Parse response
+            score = 0.5  # Default fallback
+            reasoning = f"{artist_name} shows moderate relevance to exhibition theme."
+
+            if "SCORE:" in response_text:
+                score_line = response_text.split("SCORE:")[1].split("\n")[0].strip()
+                try:
+                    score = float(score_line)
+                    score = max(0.0, min(1.0, score))  # Clamp to 0-1
+                except:
+                    logger.warning(f"Failed to parse LLM score: {score_line}")
+
+            if "REASONING:" in response_text:
+                reasoning = response_text.split("REASONING:")[1].strip()
+
+            logger.debug(f"LLM scored '{artist_name}': {score:.2f}")
+            return score, reasoning
+
+        except Exception as e:
+            logger.warning(f"LLM artist scoring failed for {artist_data.get('name')}: {e}, using heuristic fallback")
+            # Fallback to heuristic
+            from backend.utils.relevance_scoring import score_artist_relevance
+            theme_concepts = [c.refined_concept for c in refined_theme.validated_concepts]
+            return score_artist_relevance(artist_data, theme_concepts, reference_artists)
 
     def _calculate_overall_quality(
         self,
