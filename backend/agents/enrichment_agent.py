@@ -252,24 +252,56 @@ class ArtworkEnrichmentAgent:
         artwork: ArtworkCandidate,
         results: List[Dict[str, Any]]
     ) -> ArtworkCandidate:
-        """Extract IIIF manifest URLs from search results"""
+        """
+        Extract and parse IIIF manifest URLs from search results
+        Fetches manifests and extracts actual image URLs
+        """
+        from backend.utils.iiif_utils import fetch_and_parse_manifest
 
         for result in results:
             url = result.get("url", "")
             description = result.get("description", "")
 
+            manifest_url = None
+
             # Look for IIIF manifest URLs
             if "iiif" in url.lower() and "manifest" in url.lower():
                 if url.endswith(".json") or "/manifest" in url:
-                    artwork.iiif_manifest = url
-                    logger.debug(f"Found IIIF manifest: {url}")
-                    break
+                    manifest_url = url
 
             # Check description for manifest links
-            manifest_match = re.search(r'(https?://[^\s]+manifest[^\s]*\.json)', description)
-            if manifest_match:
-                artwork.iiif_manifest = manifest_match.group(1)
-                logger.debug(f"Found IIIF manifest in description: {artwork.iiif_manifest}")
+            if not manifest_url:
+                manifest_match = re.search(r'(https?://[^\s]+manifest[^\s]*\.json)', description)
+                if manifest_match:
+                    manifest_url = manifest_match.group(1)
+
+            # If we found a manifest URL, fetch and parse it
+            if manifest_url:
+                logger.debug(f"Found IIIF manifest: {manifest_url}")
+                artwork.iiif_manifest = manifest_url
+
+                try:
+                    # Fetch and parse the manifest
+                    metadata, images = await fetch_and_parse_manifest(manifest_url, timeout=10.0)
+
+                    if images:
+                        # Extract image URLs
+                        image_urls = []
+                        for img in images[:5]:
+                            if 'iiif_url' in img:
+                                image_urls.append(img['iiif_url'])
+                            elif 'url' in img:
+                                image_urls.append(img['url'])
+
+                        if image_urls:
+                            artwork.high_res_images = image_urls
+                            if not artwork.thumbnail_url:
+                                artwork.thumbnail_url = image_urls[0]
+                            logger.debug(f"Extracted {len(image_urls)} images from IIIF manifest")
+
+                except Exception as e:
+                    logger.warning(f"Failed to parse IIIF manifest {manifest_url}: {e}")
+
                 break
 
         return artwork

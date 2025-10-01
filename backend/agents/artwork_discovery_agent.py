@@ -364,13 +364,37 @@ class ArtworkDiscoveryAgent:
                                     subjects.append(subject['_label'])
                             artwork_data['subjects'] = subjects
 
-                        # Digital representations
-                        if 'representation' in item:
+                        # IIIF Manifests from subject_of (Linked Art spec)
+                        if 'subject_of' in item:
+                            for document in item['subject_of']:
+                                if 'digitally_carried_by' in document:
+                                    for digital_obj in document['digitally_carried_by']:
+                                        # Check if this conforms to IIIF Presentation API
+                                        conforms_to = digital_obj.get('conforms_to', [])
+                                        is_iiif = any(
+                                            'iiif.io/api/presentation' in str(c.get('id', ''))
+                                            for c in conforms_to if isinstance(c, dict)
+                                        )
+
+                                        if is_iiif and 'access_point' in digital_obj:
+                                            access_points = digital_obj['access_point']
+                                            if isinstance(access_points, list) and len(access_points) > 0:
+                                                manifest_url = access_points[0].get('id')
+                                                if manifest_url:
+                                                    artwork_data['iiif_manifest'] = manifest_url
+                                                    break
+
+                                if 'iiif_manifest' in artwork_data:
+                                    break
+
+                        # Fallback: Check representation field for direct image URLs
+                        if 'representation' in item and 'iiif_manifest' not in artwork_data:
                             representations = item['representation']
                             if isinstance(representations, list) and len(representations) > 0:
                                 first_rep = representations[0]
                                 if 'id' in first_rep:
-                                    artwork_data['iiif_manifest'] = first_rep['id']
+                                    # Store as thumbnail, not manifest
+                                    artwork_data['thumbnail_url'] = first_rep['id']
 
                         artworks.append(artwork_data)
 
@@ -542,7 +566,12 @@ class ArtworkDiscoveryAgent:
         self,
         artworks: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        """Fetch IIIF manifests for artworks that have them"""
+        """
+        Fetch IIIF manifests and extract images
+        Supports both IIIF Presentation API 2.0 and 3.0
+        """
+        from backend.utils.iiif_utils import fetch_and_parse_manifest
+
         logger.debug(f"Fetching IIIF manifests for {len(artworks)} artworks")
 
         enriched = []
@@ -550,35 +579,37 @@ class ArtworkDiscoveryAgent:
             if artwork.get('iiif_manifest'):
                 try:
                     manifest_url = artwork['iiif_manifest']
+                    logger.debug(f"Fetching IIIF manifest: {manifest_url}")
 
-                    async with httpx.AsyncClient(timeout=10.0) as client:
-                        response = await client.get(manifest_url)
+                    # Use our comprehensive IIIF parser
+                    metadata, images = await fetch_and_parse_manifest(manifest_url, timeout=10.0)
 
-                        if response.status_code == 200:
-                            manifest = response.json()
+                    if metadata:
+                        # Update artwork with manifest metadata
+                        if 'rights' in metadata:
+                            artwork['reproduction_rights'] = metadata['rights']
+                        if 'copyright' in metadata:
+                            artwork['copyright_status'] = metadata['copyright']
+                        if 'thumbnail' in metadata and not artwork.get('thumbnail_url'):
+                            artwork['thumbnail_url'] = metadata['thumbnail']
 
-                            # Extract high-res images from manifest
-                            images = []
-                            if 'sequences' in manifest:
-                                for sequence in manifest['sequences']:
-                                    for canvas in sequence.get('canvases', []):
-                                        for image in canvas.get('images', []):
-                                            resource = image.get('resource', {})
-                                            if 'id' in resource:
-                                                images.append(resource['id'])
+                    if images:
+                        # Extract image URLs (prefer IIIF Image API URLs over direct URLs)
+                        image_urls = []
+                        for img in images[:5]:  # Limit to 5 images
+                            # Prefer IIIF Image API URL (full resolution)
+                            if 'iiif_url' in img:
+                                image_urls.append(img['iiif_url'])
+                            elif 'url' in img:
+                                image_urls.append(img['url'])
 
-                            artwork['high_res_images'] = images[:3]  # Limit to 3
+                        if image_urls:
+                            artwork['high_res_images'] = image_urls
+                            # Use first image as thumbnail if we don't have one
+                            if not artwork.get('thumbnail_url'):
+                                artwork['thumbnail_url'] = image_urls[0]
 
-                            # Extract metadata if available
-                            if 'metadata' in manifest:
-                                for item in manifest['metadata']:
-                                    label = item.get('label', '').lower()
-                                    value = item.get('value', '')
-
-                                    if 'copyright' in label:
-                                        artwork['copyright_status'] = value
-                                    elif 'rights' in label or 'license' in label:
-                                        artwork['reproduction_rights'] = value
+                        logger.debug(f"Extracted {len(image_urls)} images from IIIF manifest")
 
                 except Exception as e:
                     logger.warning(f"Failed to fetch IIIF manifest for {artwork.get('title')}: {e}")
