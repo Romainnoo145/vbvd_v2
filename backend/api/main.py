@@ -55,17 +55,83 @@ class WebSocketManager:
             logger.info(f"WebSocket disconnected for session {session_id}")
 
     async def send_progress(self, session_id: str, status: PipelineStatus):
-        """Send progress update to connected client"""
+        """
+        Send progress update to connected client
+
+        Supports progressive streaming: sends stage completion data when available
+        """
         if session_id in self.active_connections:
             try:
-                await self.active_connections[session_id].send_json({
-                    "type": "progress",
-                    "session_id": status.session_id,
-                    "stage": status.current_stage.value,
-                    "progress": status.progress_percentage,
-                    "message": status.status_message,
-                    "updated_at": status.updated_at.isoformat()
-                })
+                # Check if this is a stage completion event
+                if status.stage_completed:
+                    # Progressive streaming: send stage completion with data
+                    message = {
+                        "type": "stage_complete",
+                        "session_id": status.session_id,
+                        "completed_stage": status.stage_completed.value,
+                        "stage": status.current_stage.value,
+                        "progress": status.progress_percentage,
+                        "message": status.status_message,
+                        "updated_at": status.updated_at.isoformat()
+                    }
+
+                    # Add stage-specific data
+                    if status.stage_completed == "theme_refinement" and status.refined_theme:
+                        message["data"] = {
+                            "exhibition_title": status.refined_theme.exhibition_title,
+                            "subtitle": status.refined_theme.subtitle,
+                            "curatorial_statement": status.refined_theme.curatorial_statement,
+                            "scholarly_rationale": status.refined_theme.scholarly_rationale,
+                            "target_audience_refined": status.refined_theme.target_audience_refined,
+                            "complexity_level": status.refined_theme.complexity_level
+                        }
+                    elif status.stage_completed == "artist_discovery" and status.discovered_artists:
+                        message["data"] = {
+                            "artists": [
+                                {
+                                    "name": a.name,
+                                    "wikidata_id": a.wikidata_id,
+                                    "birth_year": a.birth_year,
+                                    "death_year": a.death_year,
+                                    "biography": a.biography,
+                                    "relevance_score": a.relevance_score,
+                                    "relevance_reasoning": a.relevance_reasoning
+                                }
+                                for a in status.discovered_artists
+                            ]
+                        }
+                    elif status.stage_completed == "artwork_discovery" and status.discovered_artworks:
+                        message["data"] = {
+                            "artworks": [
+                                {
+                                    "uri": a.uri,
+                                    "title": a.title,
+                                    "artist_name": a.artist_name,
+                                    "date_created": a.date_created,
+                                    "medium": a.medium,
+                                    "institution_name": a.institution_name,
+                                    "iiif_manifest": a.iiif_manifest,
+                                    "thumbnail_url": a.thumbnail_url,
+                                    "relevance_score": a.relevance_score,
+                                    "relevance_reasoning": a.relevance_reasoning,
+                                    "height_cm": a.height_cm,
+                                    "width_cm": a.width_cm
+                                }
+                                for a in status.discovered_artworks
+                            ]
+                        }
+
+                    await self.active_connections[session_id].send_json(message)
+                else:
+                    # Regular progress update
+                    await self.active_connections[session_id].send_json({
+                        "type": "progress",
+                        "session_id": status.session_id,
+                        "stage": status.current_stage.value,
+                        "progress": status.progress_percentage,
+                        "message": status.status_message,
+                        "updated_at": status.updated_at.isoformat()
+                    })
             except Exception as e:
                 logger.error(f"Failed to send progress to {session_id}: {e}")
                 self.disconnect(session_id)

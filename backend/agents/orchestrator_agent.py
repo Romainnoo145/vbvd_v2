@@ -49,6 +49,12 @@ class PipelineStatus(BaseModel):
     discovered_artists: List[DiscoveredArtist] = Field(default_factory=list)
     discovered_artworks: List[ArtworkCandidate] = Field(default_factory=list)
 
+    # Progressive streaming: signals when a stage completes with data
+    stage_completed: Optional[PipelineStage] = Field(
+        default=None,
+        description="Signals which stage just completed (for progressive streaming)"
+    )
+
     # Metrics
     metrics: Dict[str, Any] = Field(default_factory=dict)
 
@@ -192,8 +198,14 @@ class OrchestratorAgent:
             status.metrics['theme_confidence'] = refined_theme.refinement_confidence
             status.metrics['validated_concepts'] = len(refined_theme.validated_concepts)
 
-            await self._update_progress(status, PipelineStage.THEME_REFINEMENT, 25,
-                f"Theme refined: {refined_theme.exhibition_title}")
+            # Stage 1 complete - send theme data for progressive streaming
+            await self._update_progress(
+                status,
+                PipelineStage.THEME_REFINEMENT,
+                25,
+                f"Theme refined: {refined_theme.exhibition_title}",
+                stage_completed=PipelineStage.THEME_REFINEMENT
+            )
             logger.info(f"Session {session_id}: Theme refined with {len(refined_theme.validated_concepts)} concepts")
 
             # STAGE 2: Artist Discovery (55%) - Using simple Wikipedia-based approach
@@ -255,8 +267,14 @@ class OrchestratorAgent:
                 if discovered_artists else 0
             )
 
-            await self._update_progress(status, PipelineStage.ARTIST_DISCOVERY, 55,
-                f"Discovered {len(discovered_artists)} artists")
+            # Stage 2 complete - send artist data for progressive streaming
+            await self._update_progress(
+                status,
+                PipelineStage.ARTIST_DISCOVERY,
+                55,
+                f"Discovered {len(discovered_artists)} artists",
+                stage_completed=PipelineStage.ARTIST_DISCOVERY
+            )
             logger.info(f"Session {session_id}: Discovered {len(discovered_artists)} artists")
 
             if not discovered_artists:
@@ -296,8 +314,14 @@ class OrchestratorAgent:
                 if discovered_artworks else 0
             )
 
-            await self._update_progress(status, PipelineStage.ARTWORK_DISCOVERY, 90,
-                f"Discovered {len(discovered_artworks)} artworks")
+            # Stage 3 complete - send artwork data for progressive streaming
+            await self._update_progress(
+                status,
+                PipelineStage.ARTWORK_DISCOVERY,
+                90,
+                f"Discovered {len(discovered_artworks)} artworks",
+                stage_completed=PipelineStage.ARTWORK_DISCOVERY
+            )
             logger.info(f"Session {session_id}: Discovered {len(discovered_artworks)} artworks")
 
             if not discovered_artworks:
@@ -609,14 +633,24 @@ REASONING: [2-3 sentences explaining your evaluation]"""
         status: PipelineStatus,
         stage: PipelineStage,
         percentage: float,
-        message: str
+        message: str,
+        stage_completed: Optional[PipelineStage] = None
     ):
-        """Update pipeline progress"""
+        """
+        Update pipeline progress
+
+        Args:
+            stage_completed: If provided, signals that this stage just completed
+                           with data (for progressive streaming)
+        """
         status.current_stage = stage
         status.progress_percentage = percentage
         status.status_message = message
         status.updated_at = datetime.utcnow()
+        status.stage_completed = stage_completed
         await self._send_progress(status)
+        # Reset stage_completed after sending
+        status.stage_completed = None
 
     async def _send_progress(self, status: PipelineStatus):
         """Send progress update via callback"""
