@@ -108,9 +108,27 @@ class EssentialDataClient:
             headers = self.config.get_headers('wikipedia')
             response = await self.client.get(search_url, params=search_params, headers=headers)
 
+            if not response:
+                logger.warning("Wikipedia search returned no response")
+                return []
+
             if response.status_code == 200:
-                data = response.json()
-                pages = data.get('query', {}).get('search', [])
+                try:
+                    data = response.json()
+                except Exception as json_error:
+                    logger.warning(f"Wikipedia response JSON parsing failed: {json_error}")
+                    return []
+
+                if not data or not isinstance(data, dict):
+                    logger.warning("Wikipedia search returned empty or invalid response")
+                    return []
+
+                query_data = data.get('query')
+                if not query_data or not isinstance(query_data, dict):
+                    logger.warning("Wikipedia search returned no query data")
+                    return []
+
+                pages = query_data.get('search', [])
 
                 # Get summaries for top results
                 results = []
@@ -142,8 +160,20 @@ class EssentialDataClient:
             headers = self.config.get_headers('wikipedia')
             response = await self.client.get(summary_url, headers=headers)
 
+            if not response:
+                logger.warning(f"Wikipedia summary for '{title}' returned no response")
+                return None
+
             if response.status_code == 200:
-                data = response.json()
+                try:
+                    data = response.json()
+                except Exception as json_error:
+                    logger.warning(f"Wikipedia summary JSON parsing failed for '{title}': {json_error}")
+                    return None
+
+                if not data or not isinstance(data, dict):
+                    logger.warning(f"Wikipedia summary for '{title}' returned empty or invalid response")
+                    return None
                 return data.get('extract', '')
             return None
         except Exception as e:

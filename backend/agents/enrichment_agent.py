@@ -191,6 +191,10 @@ class ArtworkEnrichmentAgent:
 
                 data = response.json()
 
+                if not data:
+                    logger.warning(f"Brave Search returned empty response for query: {query}")
+                    return None
+
                 if search_type == "web":
                     return data.get("web", {}).get("results", [])
                 else:
