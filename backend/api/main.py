@@ -93,7 +93,6 @@ class WebSocketManager:
                                     "wikidata_id": a.wikidata_id,
                                     "birth_year": a.birth_year,
                                     "death_year": a.death_year,
-                                    "biography": a.biography,
                                     "relevance_score": a.relevance_score,
                                     "relevance_reasoning": a.relevance_reasoning
                                 }
@@ -387,9 +386,14 @@ async def process_curator_brief(
     try:
         logger.info(f"Starting pipeline processing for session {session_id}")
 
-        # Initialize session manager
-        session_manager = get_session_manager()
-        await session_manager.create_session(session_id)
+        # Check if automatic mode is requested (for testing)
+        auto_select = config.get("auto_select", False) if config else False
+
+        # Initialize session manager (only if not in auto mode)
+        session_manager = None
+        if not auto_select:
+            session_manager = get_session_manager()
+            await session_manager.create_session(session_id)
 
         # Create progress callback
         async def progress_callback(status: PipelineStatus):
@@ -400,7 +404,7 @@ async def process_curator_brief(
             orchestrator = OrchestratorAgent(
                 data_client=client,
                 progress_callback=progress_callback,
-                session_manager=session_manager  # Enable interactive mode
+                session_manager=session_manager  # None = automatic mode, not None = interactive mode
             )
 
             # Execute pipeline

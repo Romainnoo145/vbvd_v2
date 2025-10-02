@@ -14,8 +14,8 @@ from datetime import datetime
 import websockets
 import httpx
 
-API_BASE = "http://localhost:8000"
-WS_BASE = "ws://localhost:8000"
+API_BASE = "http://localhost:8001"
+WS_BASE = "ws://localhost:8001"
 
 
 async def test_progressive_streaming():
@@ -46,7 +46,8 @@ async def test_progressive_streaming():
                     "max_artists": 5,  # Reduced for faster test
                     "max_artworks": 15,
                     "min_artist_relevance": 0.6,
-                    "min_artwork_relevance": 0.5
+                    "min_artwork_relevance": 0.5,
+                    "auto_select": True  # Automatic mode for testing (skip human-in-the-loop)
                 }
             },
             timeout=10.0
