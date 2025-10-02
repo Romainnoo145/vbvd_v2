@@ -50,17 +50,39 @@ class ThemeResearch(BaseModel):
     research_confidence: float
 
 
+class ExhibitionSection(BaseModel):
+    """Individual exhibition section"""
+    title: str
+    focus: str
+    artist_emphasis: List[str] = Field(default_factory=list)
+    estimated_artwork_count: int = Field(ge=5, le=15)
+
+
 class RefinedTheme(BaseModel):
-    """Professional exhibition theme with validated concepts"""
+    """Professional exhibition theme with comprehensive curatorial framework"""
     original_brief_id: str
     session_id: str
 
-    # Refined theme elements
+    # Core theme elements
     exhibition_title: str
     subtitle: Optional[str] = None
+    central_argument: str = Field(description="One sentence thesis statement")
     curatorial_statement: str
     theme_description: str
     scholarly_rationale: str
+
+    # Exhibition structure
+    exhibition_sections: List[ExhibitionSection] = Field(min_length=3, max_length=5)
+    opening_wall_text: str = Field(description="First text visitors read, max 50 words")
+
+    # Visitor experience
+    key_questions: List[str] = Field(min_length=3, max_length=5, description="Questions the exhibition explores")
+    contemporary_relevance: str = Field(description="Why this matters now")
+    visitor_takeaway: str = Field(description="What visitors should remember")
+
+    # Curatorial framework
+    wall_text_strategy: str = Field(description="Tone and approach for labels")
+    educational_angles: List[str] = Field(default_factory=list, description="Tour themes, workshop ideas")
 
     # Validated concepts
     validated_concepts: List[ConceptValidation]
@@ -78,6 +100,7 @@ class RefinedTheme(BaseModel):
 
     # Metadata
     refinement_confidence: float
+    iteration_count: int = Field(default=1, description="Number of refinements applied")
     created_at: datetime = Field(default_factory=datetime.utcnow)
     agent_version: str = "1.0"
 
@@ -123,16 +146,14 @@ class ThemeRefinementAgent:
         logger.info(f"Starting theme refinement for session {session_id}")
         start_time = datetime.utcnow()
 
-        # Step 1: Validate and enrich concepts
+        # Step 1: Validate and enrich concepts (for Getty AAT validation)
         concept_validations = await self._validate_and_enrich_concepts(brief.theme_concepts)
 
-        # Step 2: Research art historical context
+        # Step 2: Research art historical context (lightweight - only for confidence scoring)
         research_data = await self._conduct_research(brief, concept_validations)
 
-        # Step 3: Generate professional exhibition elements
-        exhibition_title, subtitle = await self._generate_exhibition_title(brief, concept_validations, research_data)
-        curatorial_statement = await self._generate_curatorial_statement(brief, concept_validations, research_data)
-        scholarly_rationale = await self._generate_scholarly_rationale(brief, research_data)
+        # Step 3: Generate comprehensive exhibition framework in ONE LLM call
+        framework = await self._generate_comprehensive_exhibition_framework(brief, concept_validations)
 
         # Step 4: Determine theme focus and complexity
         primary_focus, secondary_themes = self._analyze_theme_focus(concept_validations)
@@ -147,15 +168,28 @@ class ThemeRefinementAgent:
             concept_validations, research_data
         )
 
-        # Step 7: Assemble refined theme
+        # Step 7: Parse exhibition sections from framework
+        exhibition_sections = [
+            ExhibitionSection(**section) for section in framework["exhibition_sections"]
+        ]
+
+        # Step 8: Assemble refined theme
         refined_theme = RefinedTheme(
             original_brief_id=getattr(brief, 'id', 'temp-brief'),
             session_id=session_id,
-            exhibition_title=exhibition_title,
-            subtitle=subtitle,
-            curatorial_statement=curatorial_statement,
+            exhibition_title=framework["exhibition_title"],
+            subtitle=framework.get("subtitle"),
+            central_argument=framework["central_argument"],
+            curatorial_statement=framework["curatorial_statement"],
             theme_description=brief.theme_description,  # Keep original as reference
-            scholarly_rationale=scholarly_rationale,
+            scholarly_rationale=framework["scholarly_rationale"],
+            exhibition_sections=exhibition_sections,
+            opening_wall_text=framework["opening_wall_text"],
+            key_questions=framework["key_questions"],
+            contemporary_relevance=framework["contemporary_relevance"],
+            visitor_takeaway=framework["visitor_takeaway"],
+            wall_text_strategy=framework["wall_text_strategy"],
+            educational_angles=framework.get("educational_angles", []),
             validated_concepts=concept_validations,
             primary_focus=primary_focus,
             secondary_themes=secondary_themes,
@@ -165,6 +199,7 @@ class ThemeRefinementAgent:
             estimated_duration=self._estimate_duration(brief),
             space_recommendations=space_recommendations,
             refinement_confidence=refinement_confidence,
+            iteration_count=1,
             agent_version=self.agent_version
         )
 
@@ -172,6 +207,145 @@ class ThemeRefinementAgent:
         logger.info(f"Theme refinement completed in {processing_time:.2f}s - Confidence: {refinement_confidence:.2f}")
 
         return refined_theme
+
+    async def re_refine_theme(
+        self,
+        previous_theme: RefinedTheme,
+        feedback: str,
+        original_brief: CuratorBrief
+    ) -> RefinedTheme:
+        """
+        Re-refine theme based on user feedback
+
+        Fast operation: Reuses research data, only regenerates LLM content
+
+        Args:
+            previous_theme: The current refined theme
+            feedback: User's feedback for changes
+            original_brief: Original curator brief
+
+        Returns:
+            Updated RefinedTheme with incremented iteration_count
+        """
+        logger.info(f"Re-refining theme for session {previous_theme.session_id} (iteration {previous_theme.iteration_count + 1})")
+        start_time = datetime.utcnow()
+
+        if not self.openai_client:
+            logger.warning("No OpenAI client - cannot re-refine theme")
+            return previous_theme
+
+        # Build prompt with previous theme + feedback
+        concepts_str = ', '.join([v.refined_concept for v in previous_theme.validated_concepts[:5]])
+
+        prompt = f"""You are the chief curator at Museum Van Bommel Van Dam refining an exhibition based on feedback.
+
+Current Exhibition Framework:
+- Title: {previous_theme.exhibition_title}
+- Subtitle: {previous_theme.subtitle or "None"}
+- Central Argument: {previous_theme.central_argument}
+- Curatorial Statement: {previous_theme.curatorial_statement}
+- Sections: {len(previous_theme.exhibition_sections)} sections
+- Opening Wall Text: {previous_theme.opening_wall_text}
+
+Curator's Feedback:
+"{feedback}"
+
+Your task: Adjust the exhibition framework based on this feedback while maintaining the exhibition's core integrity.
+
+Original Context:
+- Theme: {original_brief.theme_title}
+- Concepts: {concepts_str}
+- Target Audience: {original_brief.target_audience}
+
+Return JSON with the SAME structure as before, incorporating the requested changes:
+{{
+  "exhibition_title": "Adjusted title if requested",
+  "subtitle": "Adjusted subtitle or null",
+  "central_argument": "Refined thesis",
+  "curatorial_statement": "Adjusted statement (250-300 words)",
+  "scholarly_rationale": "Updated rationale (150-200 words)",
+  "exhibition_sections": [
+    {{
+      "title": "Section title",
+      "focus": "Focus description",
+      "artist_emphasis": ["Artists if relevant"],
+      "estimated_artwork_count": 8
+    }}
+  ],
+  "opening_wall_text": "Updated opening text (MAX 50 words)",
+  "key_questions": ["Question 1", "Question 2", "Question 3"],
+  "contemporary_relevance": "Updated relevance",
+  "visitor_takeaway": "Updated takeaway",
+  "wall_text_strategy": "Tone and approach",
+  "educational_angles": ["Angle 1", "Angle 2", "Angle 3"]
+}}
+
+Important:
+1. If feedback requests shorter title, make it shorter
+2. If feedback requests tone change (more/less scholarly), adjust language
+3. If feedback requests focus change, adjust sections and emphasis
+4. If feedback doesn't mention something, keep it similar to current version
+5. Maintain Van Bommel Van Dam's voice: confident, direct, passionate
+
+Return ONLY valid JSON."""
+
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4-turbo-preview",
+                max_tokens=2000,
+                temperature=0.6,
+                response_format={"type": "json_object"},
+                messages=[{"role": "user", "content": prompt}]
+            )
+
+            framework_json = response.choices[0].message.content.strip()
+            framework = json.loads(framework_json)
+
+            # Parse exhibition sections
+            exhibition_sections = [
+                ExhibitionSection(**section) for section in framework["exhibition_sections"]
+            ]
+
+            # Create updated refined theme (reuse previous research data)
+            refined_theme = RefinedTheme(
+                original_brief_id=previous_theme.original_brief_id,
+                session_id=previous_theme.session_id,
+                exhibition_title=framework["exhibition_title"],
+                subtitle=framework.get("subtitle"),
+                central_argument=framework["central_argument"],
+                curatorial_statement=framework["curatorial_statement"],
+                theme_description=previous_theme.theme_description,
+                scholarly_rationale=framework["scholarly_rationale"],
+                exhibition_sections=exhibition_sections,
+                opening_wall_text=framework["opening_wall_text"],
+                key_questions=framework["key_questions"],
+                contemporary_relevance=framework["contemporary_relevance"],
+                visitor_takeaway=framework["visitor_takeaway"],
+                wall_text_strategy=framework["wall_text_strategy"],
+                educational_angles=framework.get("educational_angles", []),
+                validated_concepts=previous_theme.validated_concepts,  # Reuse
+                primary_focus=previous_theme.primary_focus,  # Reuse
+                secondary_themes=previous_theme.secondary_themes,  # Reuse
+                research_backing=previous_theme.research_backing,  # Reuse
+                target_audience_refined=previous_theme.target_audience_refined,  # Reuse
+                complexity_level=previous_theme.complexity_level,  # Reuse
+                estimated_duration=previous_theme.estimated_duration,  # Reuse
+                space_recommendations=previous_theme.space_recommendations,  # Reuse
+                refinement_confidence=previous_theme.refinement_confidence,  # Keep same
+                iteration_count=previous_theme.iteration_count + 1,  # Increment
+                created_at=datetime.utcnow(),
+                agent_version=self.agent_version
+            )
+
+            processing_time = (datetime.utcnow() - start_time).total_seconds()
+            logger.info(f"Theme re-refinement completed in {processing_time:.2f}s")
+
+            return refined_theme
+
+        except Exception as e:
+            logger.error(f"Re-refinement failed: {e}")
+            # Return previous theme unchanged
+            return previous_theme
 
     async def _validate_and_enrich_concepts(self, concepts: List[str]) -> List[ConceptValidation]:
         """
@@ -822,6 +996,167 @@ Write the scholarly rationale:"""
         rationale = response.choices[0].message.content.strip()
         logger.info(f"LLM generated scholarly rationale ({len(rationale)} chars)")
         return rationale
+
+    async def _generate_comprehensive_exhibition_framework(
+        self,
+        brief: CuratorBrief,
+        validations: List[ConceptValidation]
+    ) -> Dict[str, Any]:
+        """
+        Generate complete exhibition framework in ONE LLM call
+        Returns all new fields as structured JSON
+        """
+        if not self.openai_client:
+            # Fallback to template-based generation
+            return self._generate_framework_with_templates(brief, validations)
+
+        concepts_str = ', '.join([v.refined_concept for v in validations[:5]])
+        artists_str = ', '.join(brief.reference_artists[:5]) if brief.reference_artists else "various artists"
+
+        prompt = f"""You are the chief curator at Museum Van Bommel Van Dam designing a complete exhibition framework.
+
+Museum Van Bommel Van Dam Identity:
+- Leading modern art museum in the Netherlands
+- Specializes in abstract art, geometric abstraction, conceptualism
+- Known for: Making modern art accessible while maintaining scholarly rigor
+- Voice: Direct, intellectually engaging, passionate about modern art
+- Audience: Collectors, students, art enthusiasts, curious locals
+
+Design a COMPLETE exhibition framework as JSON.
+
+Exhibition Brief:
+- Title: {brief.theme_title}
+- Description: {brief.theme_description}
+- Key Concepts: {concepts_str}
+- Reference Artists: {artists_str}
+- Target Audience: {brief.target_audience}
+- Duration: {brief.duration_weeks} weeks
+
+Return JSON with this EXACT structure:
+{{
+  "exhibition_title": "Compelling, contemporary title (max 50 chars)",
+  "subtitle": "Clarifying subtitle or null",
+  "central_argument": "One sentence thesis - why this exhibition matters",
+  "curatorial_statement": "250-300 words explaining the exhibition's vision and approach",
+  "scholarly_rationale": "150-200 words on art historical significance",
+  "exhibition_sections": [
+    {{
+      "title": "Section 1 Title",
+      "focus": "What this section explores",
+      "artist_emphasis": ["Artist name hints if relevant"],
+      "estimated_artwork_count": 8
+    }},
+    {{
+      "title": "Section 2 Title",
+      "focus": "What this section explores",
+      "artist_emphasis": [],
+      "estimated_artwork_count": 10
+    }},
+    {{
+      "title": "Section 3 Title",
+      "focus": "What this section explores",
+      "artist_emphasis": [],
+      "estimated_artwork_count": 8
+    }}
+  ],
+  "opening_wall_text": "First text visitors read (MAX 50 words)",
+  "key_questions": [
+    "Question 1 the exhibition explores?",
+    "Question 2 about the theme?",
+    "Question 3 for visitors to consider?"
+  ],
+  "contemporary_relevance": "Why this exhibition matters NOW (100-150 words)",
+  "visitor_takeaway": "What visitors should remember after leaving",
+  "wall_text_strategy": "Tone and approach for labels (e.g., 'Direct and accessible, avoiding jargon')",
+  "educational_angles": [
+    "Tour theme 1",
+    "Workshop idea 2",
+    "Educational program 3"
+  ]
+}}
+
+Requirements:
+1. Create 3-5 exhibition sections that build a narrative arc
+2. Exhibition title must feel contemporary, not academic
+3. Central argument must be ONE powerful sentence
+4. Opening wall text MUST be under 50 words
+5. Sections should have clear focus and flow logically
+6. Contemporary relevance must connect historical art to today
+7. Educational angles should be specific and actionable
+8. Use Van Bommel Van Dam's voice: confident, direct, passionate
+
+Return ONLY valid JSON, no markdown formatting."""
+
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4-turbo-preview",
+                max_tokens=2000,
+                temperature=0.6,
+                response_format={"type": "json_object"},
+                messages=[{"role": "user", "content": prompt}]
+            )
+
+            framework_json = response.choices[0].message.content.strip()
+            framework = json.loads(framework_json)
+
+            logger.info(f"LLM generated comprehensive exhibition framework")
+            return framework
+
+        except Exception as e:
+            logger.error(f"LLM framework generation failed: {e}")
+            return self._generate_framework_with_templates(brief, validations)
+
+    def _generate_framework_with_templates(
+        self,
+        brief: CuratorBrief,
+        validations: List[ConceptValidation]
+    ) -> Dict[str, Any]:
+        """Template-based framework generation (fallback)"""
+        primary_concepts = [v.refined_concept for v in validations if v.confidence_score > 0.7]
+        if not primary_concepts:
+            primary_concepts = [v.refined_concept for v in validations[:2]]
+
+        return {
+            "exhibition_title": brief.theme_title,
+            "subtitle": "An Exploration of Artistic Innovation",
+            "central_argument": f"This exhibition examines how {', '.join(primary_concepts[:2])} transformed artistic practice.",
+            "curatorial_statement": f"This exhibition presents a comprehensive examination of {brief.theme_title.lower()}, exploring how artistic innovation emerges from tradition and experimentation.",
+            "scholarly_rationale": "This exhibition contributes to art historical discourse through rigorous research and innovative display strategies.",
+            "exhibition_sections": [
+                {
+                    "title": "Origins and Context",
+                    "focus": "Historical foundations and early developments",
+                    "artist_emphasis": brief.reference_artists[:2] if brief.reference_artists else [],
+                    "estimated_artwork_count": 8
+                },
+                {
+                    "title": "Innovation and Expression",
+                    "focus": "Key artistic innovations and breakthroughs",
+                    "artist_emphasis": brief.reference_artists[2:4] if len(brief.reference_artists) > 2 else [],
+                    "estimated_artwork_count": 12
+                },
+                {
+                    "title": "Legacy and Influence",
+                    "focus": "Contemporary resonance and ongoing impact",
+                    "artist_emphasis": [],
+                    "estimated_artwork_count": 8
+                }
+            ],
+            "opening_wall_text": f"This exhibition explores {brief.theme_title.lower()}, revealing how artists transformed their vision into groundbreaking work.",
+            "key_questions": [
+                f"How did {primary_concepts[0] if primary_concepts else 'artistic innovation'} challenge traditional approaches?",
+                "What makes these works significant today?",
+                "How do individual artistic voices contribute to broader movements?"
+            ],
+            "contemporary_relevance": f"In an era of rapid change, this exhibition offers insights into how artists navigate tradition and innovation, making it highly relevant to contemporary cultural discourse.",
+            "visitor_takeaway": "A deeper understanding of how artistic innovation shapes culture.",
+            "wall_text_strategy": "Direct and accessible language that respects visitors' intelligence while avoiding academic jargon",
+            "educational_angles": [
+                "Guided tours focusing on artistic techniques",
+                "Workshops on artistic interpretation",
+                "Lectures connecting historical and contemporary practice"
+            ]
+        }
 
     def _analyze_theme_focus(self, validations: List[ConceptValidation]) -> Tuple[str, List[str]]:
         """Analyze theme to determine primary focus and secondary themes"""
