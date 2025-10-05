@@ -13,9 +13,17 @@ import { DEMO_ARTISTS } from "@/lib/demo-data";
 export default function DemoArtistsPage() {
   const router = useRouter();
   const [artists, setArtists] = useState(DEMO_ARTISTS.map(a => ({ ...a })));
+  const [currentPage, setCurrentPage] = useState(1);
+  const artistsPerPage = 20;
 
   const selectedCount = artists.filter(a => a.selected).length;
   const targetCount = 15;
+
+  // Pagination logic
+  const totalPages = Math.ceil(artists.length / artistsPerPage);
+  const startIndex = (currentPage - 1) * artistsPerPage;
+  const endIndex = startIndex + artistsPerPage;
+  const currentArtists = artists.slice(startIndex, endIndex);
 
   const toggleArtist = (index: number) => {
     const newArtists = [...artists];
@@ -133,14 +141,32 @@ export default function DemoArtistsPage() {
           </Card>
         </motion.div>
 
+        {/* Pagination Info */}
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
+          <Card className="border-neutral-200 bg-white">
+            <CardContent className="pt-4">
+              <div className="flex items-center justify-between text-sm text-[var(--brand-muted)]">
+                <span>
+                  Showing {startIndex + 1}-{Math.min(endIndex, artists.length)} of {artists.length} artists
+                </span>
+                <span>
+                  Page {currentPage} of {totalPages}
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+
         {/* Artist Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {artists.map((artist, index) => (
+          {currentArtists.map((artist, displayIndex) => {
+            const actualIndex = startIndex + displayIndex;
+            return (
             <motion.div
-              key={index}
+              key={actualIndex}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.1 + index * 0.05 }}
+              transition={{ delay: 0.1 + displayIndex * 0.05 }}
             >
               <Card
                 className={`relative overflow-hidden cursor-pointer transition-all border-neutral-200 bg-white hover:shadow-lg ${
@@ -148,7 +174,7 @@ export default function DemoArtistsPage() {
                     ? 'ring-2 ring-[var(--brand-primary)] shadow-md'
                     : 'hover:border-[var(--brand-accent)]'
                 }`}
-                onClick={() => toggleArtist(index)}
+                onClick={() => toggleArtist(actualIndex)}
               >
                 {artist.selected && (
                   <div className="pointer-events-none absolute inset-x-0 top-0 h-1 w-full bg-[var(--brand-primary)]/80" />
@@ -159,7 +185,7 @@ export default function DemoArtistsPage() {
                       <div className="flex items-center gap-2">
                         <Checkbox
                           checked={artist.selected}
-                          onCheckedChange={() => toggleArtist(index)}
+                          onCheckedChange={() => toggleArtist(actualIndex)}
                           onClick={(e) => e.stopPropagation()}
                           className="data-[state=checked]:bg-[var(--brand-primary)] data-[state=checked]:border-[var(--brand-primary)]"
                         />
@@ -318,8 +344,83 @@ export default function DemoArtistsPage() {
                 </CardContent>
               </Card>
             </motion.div>
-          ))}
+          );
+          })}
         </div>
+
+        {/* Pagination Controls */}
+        {totalPages > 1 && (
+          <Card className="border-neutral-200 bg-white">
+            <CardContent className="pt-4">
+              <div className="flex items-center justify-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage(1)}
+                  disabled={currentPage === 1}
+                  className="border-[var(--brand-primary)]/30"
+                >
+                  First
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage(currentPage - 1)}
+                  disabled={currentPage === 1}
+                  className="border-[var(--brand-primary)]/30"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                </Button>
+
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                    let pageNum;
+                    if (totalPages <= 5) {
+                      pageNum = i + 1;
+                    } else if (currentPage <= 3) {
+                      pageNum = i + 1;
+                    } else if (currentPage >= totalPages - 2) {
+                      pageNum = totalPages - 4 + i;
+                    } else {
+                      pageNum = currentPage - 2 + i;
+                    }
+
+                    return (
+                      <Button
+                        key={pageNum}
+                        variant={currentPage === pageNum ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setCurrentPage(pageNum)}
+                        className={currentPage === pageNum ? "bg-[var(--brand-primary)] text-white" : "border-[var(--brand-primary)]/30"}
+                      >
+                        {pageNum}
+                      </Button>
+                    );
+                  })}
+                </div>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage(currentPage + 1)}
+                  disabled={currentPage === totalPages}
+                  className="border-[var(--brand-primary)]/30"
+                >
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage(totalPages)}
+                  disabled={currentPage === totalPages}
+                  className="border-[var(--brand-primary)]/30"
+                >
+                  Last
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Action Buttons */}
         <Card className="relative overflow-hidden border-neutral-200 bg-white shadow-sm sticky bottom-6">
