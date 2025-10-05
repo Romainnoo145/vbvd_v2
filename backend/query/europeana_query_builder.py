@@ -206,33 +206,34 @@ class EuropeanaQueryBuilder:
 
     def _build_bilingual_query(self, section_keywords: List[str], country: Optional[str] = None) -> str:
         """
-        Build BILINGUAL search query - English + local language with AND logic for specificity
+        Build search query - movements only (keeps it simple and effective)
 
-        Strategy: Use AND to combine different query components
-        - Art movements (OR between movements): Surrealism OR Contemporary Art
-        - AND context keywords (OR between bilingual pairs): (light OR lumière OR color OR couleur)
-        - Result: Artworks must match BOTH movement AND context keywords
+        Strategy: Use art movements with OR between them
+        - Art movements (English): Surrealism OR Contemporary Art
+        - TYPE:IMAGE filter
+        - Country filter in qf parameter
 
-        Structure: (movement1 OR movement2) AND (keyword1_en OR keyword1_local OR keyword2_en OR keyword2_local) AND TYPE:IMAGE
+        Why movements only?
+        ✅ Movements are well-tagged in Europeana metadata
+        ✅ Specific enough to be meaningful (not millions of results)
+        ✅ Broad enough to find artworks (not zero results)
+        ✅ Simple and predictable
 
-        Why this structure?
-        ✅ Specific enough: Must match movement AND context (not just any term)
-        ✅ Bilingual within each group: English OR local language for each concept
-        ✅ Fair and context-rich!
+        Note: Context keywords (photography, modern, etc.) caused issues:
+        - All OR: Too broad (millions of results)
+        - With AND: Too narrow (zero results - metadata doesn't have both)
 
         Args:
             section_keywords: Keywords from section focus (not used - reserved for future)
             country: Target country (e.g., "france", "netherlands") - if None, uses English only
 
         Returns:
-            Query string like: (Surrealism OR "Contemporary Art") AND (light OR lumière OR color OR couleur) AND TYPE:IMAGE
+            Query string like: (Surrealism OR "Contemporary Art") AND TYPE:IMAGE
         """
-        query_parts = []
-
-        # 1. Art movements group (OR between movements)
+        # Art movements group (OR between movements)
         movement_terms = []
         if self.brief.art_movements:
-            for movement_key in self.brief.art_movements[:2]:  # Top 2 movements
+            for movement_key in self.brief.art_movements[:3]:  # Top 3 movements for variety
                 if movement_key in ART_MOVEMENTS:
                     movement_list = ART_MOVEMENTS[movement_key]
                     if movement_list:
@@ -243,50 +244,25 @@ class EuropeanaQueryBuilder:
                         else:
                             movement_terms.append(term)
 
+        # Build query
         if movement_terms:
             if len(movement_terms) == 1:
-                query_parts.append(movement_terms[0])
+                semantic_query = movement_terms[0]
             else:
-                query_parts.append('(' + ' OR '.join(movement_terms) + ')')
+                semantic_query = '(' + ' OR '.join(movement_terms) + ')'
         else:
-            # Fallback: generic "art"
-            query_parts.append('art')
-
-        # 2. Context keywords group - BILINGUAL (OR between all bilingual pairs)
-        context_terms = []
-        context_keywords = self._get_context_keywords()
-
-        for english_keyword in context_keywords:
-            # Add English version
-            context_terms.append(english_keyword)
-
-            # Add local language version if country specified
-            if country and english_keyword in self.MULTILINGUAL_KEYWORDS:
-                country_lower = country.lower()
-                if country_lower in self.COUNTRY_LANGUAGES:
-                    lang_code = self.COUNTRY_LANGUAGES[country_lower]
-                    translations = self.MULTILINGUAL_KEYWORDS[english_keyword]
-
-                    if lang_code in translations:
-                        local_term = translations[lang_code]
-                        if local_term not in context_terms:  # Avoid duplicates
-                            context_terms.append(local_term)
-
-        if context_terms:
-            if len(context_terms) == 1:
-                query_parts.append(context_terms[0])
-            else:
-                query_parts.append('(' + ' OR '.join(context_terms) + ')')
-
-        # Build final query with AND between groups
-        if len(query_parts) == 1:
-            semantic_query = query_parts[0]
-        else:
-            semantic_query = ' AND '.join(query_parts)
+            # Fallback: generic "art" (+ local translation if available)
+            semantic_query = 'art'
+            if country and country.lower() in self.COUNTRY_LANGUAGES:
+                lang_code = self.COUNTRY_LANGUAGES[country.lower()]
+                if 'art' in self.MULTILINGUAL_KEYWORDS:
+                    local_art = self.MULTILINGUAL_KEYWORDS['art'].get(lang_code)
+                    if local_art:
+                        semantic_query = f'(art OR {local_art})'
 
         query = f'{semantic_query} AND TYPE:IMAGE'
 
-        logger.debug(f"Built bilingual query for {country or 'international'}: movements={len(movement_terms)}, context={len(context_terms)}")
+        logger.debug(f"Built movement-only query for {country or 'international'}: {len(movement_terms)} movements")
         return query
 
     def _get_context_keywords(self) -> List[str]:
