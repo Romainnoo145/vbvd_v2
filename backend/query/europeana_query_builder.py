@@ -293,12 +293,12 @@ class EuropeanaQueryBuilder:
         """
         Get context keywords (English) based on curator brief
 
-        Returns English keywords like ['painting', 'light', 'abstract']
+        Returns English keywords like ['photography', 'light', 'abstract']
         These will be translated to local language in _build_bilingual_query
         """
         keywords = []
 
-        # Add media types from brief
+        # Add media types from brief - map to keywords we have translations for
         if self.brief.media_types:
             media_map = {
                 'painting': 'painting',
@@ -306,26 +306,31 @@ class EuropeanaQueryBuilder:
                 'photography': 'photography',
                 'drawing': 'drawing',
                 'print': 'print',
+                'video_art': 'modern',  # Video art -> modern
+                'installation': 'contemporary',  # Installation -> contemporary
+                'mixed_media': 'abstract',  # Mixed media -> abstract
             }
             for media in self.brief.media_types[:2]:  # Top 2
                 if media in media_map:
-                    keywords.append(media_map[media])
+                    keyword = media_map[media]
+                    if keyword not in keywords:
+                        keywords.append(keyword)
 
         # Add thematic keywords based on art movements
         if self.brief.art_movements:
             for movement in self.brief.art_movements[:2]:
                 if 'surrealism' in movement.lower() or 'surreal' in movement.lower():
-                    if 'abstract' not in keywords:
+                    if 'abstract' not in keywords and len(keywords) < 3:
                         keywords.append('abstract')
                 elif 'abstract' in movement.lower():
-                    if 'abstract' not in keywords:
+                    if 'abstract' not in keywords and len(keywords) < 3:
                         keywords.append('abstract')
                 elif 'impression' in movement.lower():
-                    if 'light' not in keywords:
+                    if 'light' not in keywords and len(keywords) < 3:
                         keywords.append('light')
                 elif 'contemporary' in movement.lower():
-                    if 'modern' not in keywords:
-                        keywords.append('modern')
+                    if 'contemporary' not in keywords and len(keywords) < 3:
+                        keywords.append('contemporary')
 
         # Ensure we have at least 2 keywords
         general_keywords = ['light', 'color', 'form']
@@ -333,6 +338,7 @@ class EuropeanaQueryBuilder:
             if kw not in keywords and len(keywords) < 3:
                 keywords.append(kw)
 
+        logger.debug(f"Context keywords: {keywords}")
         return keywords[:3]  # Max 3 context keywords
 
     def _build_qf_filters(self) -> List[str]:
