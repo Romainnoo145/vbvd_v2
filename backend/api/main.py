@@ -210,6 +210,32 @@ class SelectionResponse(BaseModel):
     selected_count: int
 
 
+class RefineRequest(BaseModel):
+    """Request model for re-refining theme"""
+    feedback: str = Field(description="User's feedback for theme refinement")
+
+
+class RefineResponse(BaseModel):
+    """Response model for theme refinement"""
+    session_id: str
+    message: str
+    iteration_count: int
+    theme: Dict
+
+
+class ContinueRequest(BaseModel):
+    """Request model for continuing to next phase"""
+    phase: str = Field(description="Next phase: 'artist_discovery' or 'artwork_discovery'")
+
+
+class ContinueResponse(BaseModel):
+    """Response model for phase continuation"""
+    session_id: str
+    message: str
+    next_phase: str
+    websocket_url: str
+
+
 # API Endpoints
 
 @app.get("/")
@@ -231,10 +257,69 @@ async def health_check():
     }
 
 
+@app.get("/api/categories")
+async def get_categories():
+    """
+    Get all available categories for the exhibition form
+
+    Returns structured data for time periods, art movements, and media types
+    that match the europeana_topics.py backend configuration.
+    """
+    from backend.config.europeana_topics import TIME_PERIODS, ART_MOVEMENTS, MEDIA_TYPES
+
+    def make_label(key: str) -> str:
+        """Convert snake_case key to Title Case label"""
+        return key.replace('_', ' ').title()
+
+    # Van Bommel focus media types (contemporary art museum)
+    priority_media = {'sculpture', 'installation', 'mixed_media', 'photography', 'video_art', 'performance_art'}
+
+    # Transform TIME_PERIODS dict into frontend-friendly format
+    time_periods = [
+        {
+            "value": key,
+            "label": make_label(key),
+            "years": {"start": value["start"], "end": value["end"]}
+        }
+        for key, value in TIME_PERIODS.items()
+    ]
+
+    # Transform ART_MOVEMENTS dict into frontend-friendly format
+    art_movements = [
+        {
+            "value": key,
+            "label": make_label(key),
+            "search_terms": value  # value is already a list
+        }
+        for key, value in ART_MOVEMENTS.items()
+    ]
+
+    # Transform MEDIA_TYPES dict into frontend-friendly format
+    media_types = [
+        {
+            "value": key,
+            "label": make_label(key),
+            "search_terms": value,  # value is already a list
+            "priority": key in priority_media
+        }
+        for key, value in MEDIA_TYPES.items()
+    ]
+
+    return {
+        "time_periods": time_periods,
+        "art_movements": art_movements,
+        "media_types": media_types
+    }
+
+
 @app.post("/api/curator/submit", response_model=SubmitResponse)
 async def submit_curator_brief(request: CuratorBriefRequest):
     """
     Submit a curator brief for processing
+
+    Supports phase-specific execution via config.phase:
+    - "theme_only": Only refine theme and stop (fast, 15-30s)
+    - "full": Execute complete pipeline (default)
 
     Returns session ID and WebSocket URL for progress tracking
     """
@@ -320,6 +405,120 @@ async def select_artworks(session_id: str, request: SelectionRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/sessions/{session_id}/refine", response_model=RefineResponse)
+async def refine_theme(session_id: str, request: RefineRequest):
+    """
+    Re-refine theme based on user feedback
+
+    This endpoint allows iterative refinement of the exhibition theme.
+    It reuses research data and only regenerates LLM content for fast responses (5-10 seconds).
+    """
+    try:
+        session_manager = get_session_manager()
+
+        # Get current theme from session
+        current_theme = await session_manager.get_refined_theme(session_id)
+        if not current_theme:
+            raise HTTPException(status_code=404, detail=f"Session {session_id}: No refined theme found")
+
+        # Get original brief from session (we need this for re-refinement)
+        session = await session_manager.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+        # We need the original brief - for now, create a minimal one
+        # TODO: Store original brief in session for proper re-refinement
+        from backend.models import CuratorBrief
+        original_brief = CuratorBrief(
+            theme_title=current_theme.theme_description or "Theme",
+            theme_description=current_theme.theme_description,
+            theme_concepts=[c.original_concept for c in current_theme.validated_concepts[:5]],
+            target_audience="general",
+            duration_weeks=12
+        )
+
+        # Initialize agents
+        data_client = EssentialDataClient()
+        from backend.agents.theme_refinement_agent import ThemeRefinementAgent
+        theme_agent = ThemeRefinementAgent(data_client)
+
+        # Re-refine theme with feedback
+        updated_theme = await theme_agent.re_refine_theme(
+            previous_theme=current_theme,
+            feedback=request.feedback,
+            original_brief=original_brief
+        )
+
+        # Store updated theme in session
+        await session_manager.store_refined_theme(session_id, updated_theme)
+
+        # Return updated theme
+        return RefineResponse(
+            session_id=session_id,
+            message=f"Theme refined successfully (iteration {updated_theme.iteration_count})",
+            iteration_count=updated_theme.iteration_count,
+            theme=updated_theme.model_dump(mode='json')
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to refine theme for session {session_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/sessions/{session_id}/continue", response_model=ContinueResponse)
+async def continue_to_next_phase(session_id: str, request: ContinueRequest):
+    """
+    Approve theme and continue to next phase
+
+    Validates that prerequisites are met and starts background task for the next phase.
+    Returns WebSocket URL for progress tracking.
+    """
+    try:
+        session_manager = get_session_manager()
+
+        # Get session
+        session = await session_manager.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+        # Validate phase parameter
+        if request.phase not in ['artist_discovery', 'artwork_discovery']:
+            raise HTTPException(status_code=400, detail="Phase must be 'artist_discovery' or 'artwork_discovery'")
+
+        # Check if we can start this phase
+        can_proceed = await session_manager.can_start_phase(session_id, request.phase)
+        if not can_proceed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot start {request.phase} - prerequisites not met"
+            )
+
+        # Mark theme as approved if starting artist discovery
+        if request.phase == 'artist_discovery':
+            await session_manager.approve_theme(session_id)
+
+        # Start background task for the phase
+        # TODO: Implement background task execution for phase continuation
+        # For now, just return success response
+
+        logger.info(f"Session {session_id}: Starting {request.phase} phase")
+
+        return ContinueResponse(
+            session_id=session_id,
+            message=f"Starting {request.phase}",
+            next_phase=request.phase,
+            websocket_url=f"/ws/{session_id}"
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to continue to next phase for session {session_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/proposals/{session_id}")
 async def get_proposal(session_id: str):
     """
@@ -351,6 +550,16 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             "session_id": session_id,
             "message": "WebSocket connected"
         })
+
+        # Send any pending messages that were generated before this connection
+        if hasattr(websocket_manager, 'pending_messages') and session_id in websocket_manager.pending_messages:
+            logger.info(f"Sending pending message to newly connected WebSocket for session {session_id}")
+            try:
+                await websocket.send_json(websocket_manager.pending_messages[session_id])
+                logger.info(f"Successfully sent pending message for session {session_id}")
+                del websocket_manager.pending_messages[session_id]
+            except Exception as e:
+                logger.error(f"Failed to send pending message for session {session_id}: {e}")
 
         # Keep connection alive and handle incoming messages
         while True:
@@ -408,25 +617,59 @@ async def process_curator_brief(
             )
 
             # Execute pipeline
-            proposal = await orchestrator.execute_pipeline(
+            result = await orchestrator.execute_pipeline(
                 curator_brief=curator_brief,
                 session_id=session_id,
                 config=config
             )
 
-            # Store result
-            proposals[session_id] = proposal
+            # Check if theme-only execution or full pipeline
+            phase = config.get('phase', 'full') if config else 'full'
 
-            # Send completion message
-            if session_id in websocket_manager.active_connections:
-                await websocket_manager.active_connections[session_id].send_json({
-                    "type": "completed",
+            if phase == 'theme_only':
+                # Result is a RefinedTheme - send theme_complete message
+                logger.info(f"Preparing to send theme_complete message for session {session_id}")
+
+                theme_data = result.model_dump(mode='json')
+                logger.info(f"Serialized theme data successfully for session {session_id}")
+
+                # Store theme data temporarily for late-connecting WebSockets
+                if not hasattr(websocket_manager, 'pending_messages'):
+                    websocket_manager.pending_messages = {}
+
+                websocket_manager.pending_messages[session_id] = {
+                    "type": "theme_complete",
                     "session_id": session_id,
-                    "message": "Exhibition proposal complete",
-                    "proposal_url": f"/api/proposals/{session_id}"
-                })
+                    "message": "Theme refinement complete",
+                    "theme": theme_data
+                }
 
-            logger.info(f"Pipeline processing completed for session {session_id}")
+                # Try to send immediately if connection exists
+                if session_id in websocket_manager.active_connections:
+                    try:
+                        await websocket_manager.active_connections[session_id].send_json(
+                            websocket_manager.pending_messages[session_id]
+                        )
+                        logger.info(f"Successfully sent theme_complete message for session {session_id}")
+                        del websocket_manager.pending_messages[session_id]
+                    except Exception as e:
+                        logger.warning(f"Failed to send theme_complete message for session {session_id}: {e}. Will retry when WebSocket reconnects.")
+                else:
+                    logger.info(f"No active WebSocket for session {session_id}. Message will be sent when client connects.")
+
+                logger.info(f"Theme-only processing completed for session {session_id}")
+            else:
+                # Result is an ExhibitionProposal - store and send completed message
+                proposals[session_id] = result
+
+                if session_id in websocket_manager.active_connections:
+                    await websocket_manager.active_connections[session_id].send_json({
+                        "type": "completed",
+                        "session_id": session_id,
+                        "message": "Exhibition proposal complete",
+                        "proposal_url": f"/api/proposals/{session_id}"
+                    })
+                logger.info(f"Pipeline processing completed for session {session_id}")
 
     except Exception as e:
         logger.error(f"Pipeline processing failed for session {session_id}: {e}", exc_info=True)

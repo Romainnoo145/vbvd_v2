@@ -4,6 +4,7 @@ Transforms rough curator input into professional exhibition themes with scholarl
 """
 
 import asyncio
+import json
 import logging
 import os
 from typing import List, Dict, Any, Optional, Tuple
@@ -291,7 +292,7 @@ Return ONLY valid JSON."""
 
         try:
             response = self.openai_client.chat.completions.create(
-                model="gpt-4-turbo-preview",
+                model="gpt-4o-mini",
                 max_tokens=2000,
                 temperature=0.6,
                 response_format={"type": "json_object"},
@@ -547,7 +548,11 @@ Return ONLY valid JSON."""
             if wikipedia_results and len(wikipedia_results) > 0:
                 # Extract relevant context from the first result
                 first_result = wikipedia_results[0]
-                content = first_result.get('extract', '')
+                if not first_result or not isinstance(first_result, dict):
+                    return f"Art historical concept: {concept}"
+
+                # Fix: Wikipedia returns 'summary', not 'extract'
+                content = first_result.get('summary', '') or first_result.get('snippet', '')
 
                 # Return first 200 characters as context
                 if len(content) > 200:
@@ -795,7 +800,7 @@ TITLE: [exhibition title]
 SUBTITLE: [subtitle or NONE if not needed]"""
 
         response = self.openai_client.chat.completions.create(
-            model="gpt-4-turbo-preview",
+            model="gpt-4o-mini",
             max_tokens=200,
             temperature=0.7,  # Slightly creative for titles
             messages=[{"role": "user", "content": prompt}]
@@ -906,7 +911,7 @@ Requirements:
 Write the curatorial statement for Museum Van Bommel Van Dam:"""
 
         response = self.openai_client.chat.completions.create(
-            model="gpt-4-turbo-preview",
+            model="gpt-4o-mini",
             max_tokens=400,
             temperature=0.5,  # Balanced creativity and precision
             messages=[{"role": "user", "content": prompt}]
@@ -987,7 +992,7 @@ Requirements:
 Write the scholarly rationale:"""
 
         response = self.openai_client.chat.completions.create(
-            model="gpt-4-turbo-preview",
+            model="gpt-4o-mini",
             max_tokens=350,
             temperature=0.3,  # More conservative for scholarly text
             messages=[{"role": "user", "content": prompt}]
@@ -1089,7 +1094,7 @@ Return ONLY valid JSON, no markdown formatting."""
 
         try:
             response = self.openai_client.chat.completions.create(
-                model="gpt-4-turbo-preview",
+                model="gpt-4o-mini",
                 max_tokens=2000,
                 temperature=0.6,
                 response_format={"type": "json_object"},

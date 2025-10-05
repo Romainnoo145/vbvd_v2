@@ -46,6 +46,11 @@ class CuratorSession:
     status_message: str = ""
     error_message: Optional[str] = None
 
+    # Phase tracking (for iterative refinement)
+    current_phase: str = "theme_refinement"  # "theme_refinement", "artist_discovery", "artwork_discovery", "complete"
+    theme_approved: bool = False
+    theme_iteration_count: int = 0
+
     # Pipeline data
     refined_theme: Optional[RefinedTheme] = None
     artist_candidates: List[DiscoveredArtist] = field(default_factory=list)
@@ -93,6 +98,11 @@ class CuratorSession:
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
             "error": self.error_message,
+
+            # Phase tracking
+            "current_phase": self.current_phase,
+            "theme_approved": self.theme_approved,
+            "theme_iteration_count": self.theme_iteration_count,
 
             # Include candidates if awaiting selection
             "artist_candidates": [
@@ -320,6 +330,110 @@ class SessionManager:
         )
         logger.error(f"Session {session_id}: Failed - {error}")
         return session
+
+    async def store_refined_theme(self, session_id: str, theme: RefinedTheme) -> Optional[CuratorSession]:
+        """Store refined theme in session"""
+        async with self._lock:
+            session = self.sessions.get(session_id)
+            if not session:
+                logger.warning(f"Session {session_id} not found")
+                return None
+
+            session.refined_theme = theme
+            session.theme_iteration_count = theme.iteration_count
+            session.current_phase = "theme_refinement"
+            session.updated_at = datetime.utcnow()
+
+            logger.info(f"Session {session_id}: Stored refined theme (iteration {theme.iteration_count})")
+            return session
+
+    async def get_refined_theme(self, session_id: str) -> Optional[RefinedTheme]:
+        """Get refined theme from session"""
+        session = await self.get_session(session_id)
+        if not session:
+            logger.warning(f"Session {session_id} not found")
+            return None
+
+        return session.refined_theme
+
+    async def increment_theme_iteration(self, session_id: str) -> Optional[CuratorSession]:
+        """Increment theme iteration count"""
+        async with self._lock:
+            session = self.sessions.get(session_id)
+            if not session:
+                logger.warning(f"Session {session_id} not found")
+                return None
+
+            session.theme_iteration_count += 1
+            session.updated_at = datetime.utcnow()
+
+            logger.info(f"Session {session_id}: Theme iteration count now {session.theme_iteration_count}")
+            return session
+
+    async def approve_theme(self, session_id: str) -> Optional[CuratorSession]:
+        """Mark theme as approved and ready for next phase"""
+        async with self._lock:
+            session = self.sessions.get(session_id)
+            if not session:
+                logger.warning(f"Session {session_id} not found")
+                return None
+
+            if not session.refined_theme:
+                raise ValueError(f"Session {session_id} has no refined theme to approve")
+
+            session.theme_approved = True
+            session.current_phase = "artist_discovery"
+            session.updated_at = datetime.utcnow()
+
+            logger.info(f"Session {session_id}: Theme approved, ready for artist discovery")
+            return session
+
+    async def can_start_phase(self, session_id: str, phase: str) -> bool:
+        """
+        Check if session can start a specific phase
+
+        Args:
+            session_id: Session ID
+            phase: "artist_discovery", "artwork_discovery", or "complete"
+
+        Returns:
+            True if phase can be started
+        """
+        session = await self.get_session(session_id)
+        if not session:
+            logger.warning(f"Session {session_id} not found")
+            return False
+
+        if phase == "artist_discovery":
+            # Can start if theme is approved
+            if not session.theme_approved:
+                logger.warning(f"Session {session_id}: Cannot start artist discovery - theme not approved")
+                return False
+            if not session.refined_theme:
+                logger.warning(f"Session {session_id}: Cannot start artist discovery - no refined theme")
+                return False
+            return True
+
+        elif phase == "artwork_discovery":
+            # Can start if artist discovery is complete and artists are selected
+            if session.current_phase not in ["artist_discovery", "artwork_discovery"]:
+                logger.warning(f"Session {session_id}: Cannot start artwork discovery - wrong phase ({session.current_phase})")
+                return False
+            if not session.selected_artists:
+                logger.warning(f"Session {session_id}: Cannot start artwork discovery - no artists selected")
+                return False
+            return True
+
+        elif phase == "complete":
+            # Can complete if artwork discovery is done
+            if not session.selected_artworks:
+                logger.warning(f"Session {session_id}: Cannot complete - no artworks selected")
+                return False
+            return True
+
+        else:
+            logger.warning(f"Unknown phase: {phase}")
+            return False
 
     def cleanup_old_sessions(self, max_age_hours: int = 24):
         """Remove sessions older than max_age_hours"""

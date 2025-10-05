@@ -12,6 +12,12 @@ import os
 from datetime import datetime
 
 from backend.config import data_config
+from backend.config.europeana_topics import (
+    find_best_theme_match,
+    get_europeana_search_params,
+    MEDIA_TYPES,
+    ART_MOVEMENTS,
+)
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -94,6 +100,10 @@ class EssentialDataClient:
         Returns list of articles with summaries
         """
         try:
+            # Initialize client if needed
+            if not self.client:
+                self.client = httpx.AsyncClient(timeout=self.timeout)
+
             # First, search for relevant pages
             search_url = self.config.get_endpoint_url('wikipedia', 'api')
             search_params = {
@@ -119,16 +129,27 @@ class EssentialDataClient:
                     logger.warning(f"Wikipedia response JSON parsing failed: {json_error}")
                     return []
 
-                if not data or not isinstance(data, dict):
-                    logger.warning("Wikipedia search returned empty or invalid response")
+                if data is None:
+                    logger.warning("Wikipedia search returned None data")
+                    return []
+
+                if not isinstance(data, dict):
+                    logger.warning(f"Wikipedia search returned non-dict data: {type(data)}")
                     return []
 
                 query_data = data.get('query')
-                if not query_data or not isinstance(query_data, dict):
-                    logger.warning("Wikipedia search returned no query data")
+                if query_data is None:
+                    logger.warning("Wikipedia search query_data is None")
+                    return []
+
+                if not isinstance(query_data, dict):
+                    logger.warning(f"Wikipedia query_data is not a dict: {type(query_data)}")
                     return []
 
                 pages = query_data.get('search', [])
+                if pages is None:
+                    logger.warning("Wikipedia pages is None")
+                    return []
 
                 # Get summaries for top results
                 results = []
@@ -158,26 +179,47 @@ class EssentialDataClient:
         try:
             summary_url = self.config.get_endpoint_url('wikipedia', 'summary', title=title)
             headers = self.config.get_headers('wikipedia')
+
+            if not self.client:
+                logger.warning("HTTP client not initialized")
+                return None
+
             response = await self.client.get(summary_url, headers=headers)
 
-            if not response:
-                logger.warning(f"Wikipedia summary for '{title}' returned no response")
+            if response is None:
+                logger.warning(f"Wikipedia summary for '{title}' returned None response")
                 return None
 
             if response.status_code == 200:
                 try:
                     data = response.json()
+
+                    if data is None:
+                        logger.warning(f"Wikipedia summary JSON for '{title}' is None")
+                        return None
+
+                    if not isinstance(data, dict):
+                        logger.warning(f"Wikipedia summary for '{title}' is not a dict: {type(data)}")
+                        return None
+
+                    # Safely get the extract field
+                    extract = data.get('extract')
+                    if extract is None:
+                        logger.warning(f"Wikipedia summary for '{title}' has no 'extract' field. Keys: {list(data.keys())}")
+                        return None
+
+                    return str(extract)
+
                 except Exception as json_error:
                     logger.warning(f"Wikipedia summary JSON parsing failed for '{title}': {json_error}")
                     return None
-
-                if not data or not isinstance(data, dict):
-                    logger.warning(f"Wikipedia summary for '{title}' returned empty or invalid response")
-                    return None
-                return data.get('extract', '')
-            return None
+            else:
+                logger.warning(f"Wikipedia summary for '{title}' returned status {response.status_code}")
+                return None
         except Exception as e:
             logger.warning(f"Failed to get Wikipedia summary for {title}: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     async def _search_wikidata(self, query: str, context: str) -> List[Dict]:
@@ -484,6 +526,10 @@ LIMIT 10
             return []
 
         try:
+            # Initialize client if needed
+            if not self.client:
+                self.client = httpx.AsyncClient(timeout=self.timeout)
+
             search_url = self.config.get_endpoint_url('brave_search', 'web')
             search_query = f"{query} {context} museum exhibition art"
 
@@ -532,6 +578,7 @@ LIMIT 10
     async def _search_europeana(self, query: str, context: str) -> List[Dict]:
         """
         Search Europeana - 58M+ cultural heritage items with IIIF support
+        Enhanced with theme-based filtering using Europeana topic taxonomy
         """
         api_key = self.config.get_api_key('europeana')
         if not api_key:
@@ -541,8 +588,10 @@ LIMIT 10
         try:
             search_url = "https://api.europeana.eu/record/v2/search.json"
 
+            # Try to find theme mapping from context
+            theme_mapping = find_best_theme_match(context)
+
             # Build search query based on context
-            # Don't filter by IIIF - get all results, IIIF manifests extracted when available
             if 'artist' in context.lower() or 'person' in context.lower():
                 # Search by artist name
                 search_query = f'who:"{query}" AND TYPE:IMAGE'
@@ -550,15 +599,48 @@ LIMIT 10
                 # General artwork search
                 search_query = f'"{query}" AND TYPE:IMAGE'
 
+            # Enhance query with theme-based art movements if available
+            if theme_mapping and theme_mapping.art_movements:
+                # Add art movement context for better relevance
+                movements_query = ' OR '.join([f'"{m}"' for m in theme_mapping.art_movements[:3]])
+                # Use OR to broaden search, not restrict it
+                search_query = f'({search_query}) OR ({movements_query})'
+                logger.info(f"Enhanced Europeana query with movements: {theme_mapping.art_movements[:3]}")
+
             params = {
                 'wskey': api_key,
                 'query': search_query,
-                'rows': 20,
+                'rows': 30,  # Increased from 20 for better results with theme filtering
                 'profile': 'rich',  # Get full metadata including IIIF
                 'reusability': 'open,restricted',  # Include all available items
                 'media': 'true',  # Only items with media
-                'thumbnail': 'true'
+                'thumbnail': 'true',
+                'qf': []  # Query facets for additional filtering
             }
+
+            # Add theme-based qf filters if available
+            if theme_mapping and theme_mapping.qf_filters:
+                for field, values in theme_mapping.qf_filters.items():
+                    # Add language suffix for proxy_dc fields
+                    if field.startswith('proxy_dc'):
+                        field_with_lang = f'{field}.en' if not field.endswith('.en') else field
+                        for value in values:
+                            params['qf'].append(f'{field_with_lang}:"{value}"')
+                    else:
+                        for value in values:
+                            if field == 'YEAR' and len(values) == 2:
+                                # Year range filter
+                                params['qf'].append(f'YEAR:[{values[0]} TO {values[1]}]')
+                                break
+                            else:
+                                params['qf'].append(f'{field}:"{value}"')
+
+                if params['qf']:
+                    logger.info(f"Applied Europeana qf filters: {params['qf']}")
+
+            # Convert qf list to comma-separated string if not empty
+            if not params['qf']:
+                del params['qf']
 
             headers = self.config.get_headers('europeana')
             response = await self.client.get(search_url, params=params, headers=headers)

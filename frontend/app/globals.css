@@ -44,6 +44,15 @@
 }
 
 :root {
+  /* Museum van Bommel van Dam Brand Colors */
+  --brand-bg: #F7F6F3;
+  --brand-ink: #1C1C1C;
+  --brand-muted: #6B6F76;
+  --brand-primary: #7A1E20;
+  --brand-primary-600: #611618;
+  --brand-accent: #C0A46B;
+
+  /* shadcn/ui Theme Variables */
   --radius: 0.625rem;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);

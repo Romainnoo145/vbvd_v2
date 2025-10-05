@@ -11,28 +11,116 @@ import re
 
 class CuratorBrief(BaseModel):
     """
-    Input from curator via web form - VALIDATED for Linked Art compatibility
+    Input from curator via web form - Simplified MVP model
     This is the starting point of the 3-stage workflow
     """
 
-    # Core exhibition concept
+    # ===== MVP CORE FIELDS =====
+    # Section 1: Exhibition Concept
     theme_title: str = Field(
-        min_length=5,
-        max_length=200,
-        description="Main exhibition title or theme"
-    )
-
-    theme_description: str = Field(
-        min_length=50,
-        max_length=2000,
-        description="Detailed description of the exhibition concept"
-    )
-
-    # CRITICAL: These concepts must be mappable to Getty AAT terms
-    theme_concepts: List[str] = Field(
         min_length=1,
+        max_length=200,
+        description="Main exhibition title or theme (REQUIRED)"
+    )
+
+    theme_description: Optional[str] = Field(
+        default="",
+        max_length=2000,
+        description="Exhibition description (multiline, optional)"
+    )
+
+    concept_detail: Optional[str] = Field(
+        default="",
+        max_length=5000,
+        description="Detailed concept notes for curator (optional)"
+    )
+
+    # Section 2: Historical Period
+    time_period: Optional[str] = Field(
+        default="post_war",
+        description="Time period: post_war, early_modern, contemporary, etc."
+    )
+
+    year_range_from: Optional[int] = Field(
+        default=None,
+        ge=1000,
+        le=2100,
+        description="Year range start (optional)"
+    )
+
+    year_range_to: Optional[int] = Field(
+        default=None,
+        ge=1000,
+        le=2100,
+        description="Year range end (optional)"
+    )
+
+    # Section 3: Art Movements & Media
+    art_movements: List[str] = Field(
+        default=[],
+        max_length=5,
+        description="Selected art movements (max 5)"
+    )
+
+    media_types: List[str] = Field(
+        default=[],
+        max_length=5,
+        description="Selected media types (max 5)"
+    )
+
+    thematic_keywords: Optional[str] = Field(
+        default="",
+        max_length=500,
+        description="Comma-separated thematic keywords (optional)"
+    )
+
+    # Section 4: Geography & Collections
+    primary_country: str = Field(
+        default="Netherlands",
+        description="Primary country for collection focus"
+    )
+
+    geographic_focus: List[str] = Field(
+        default=["Netherlands", "Belgium", "Germany"],
+        description="Selected countries for artwork collection sources (MVP field from form)"
+    )
+
+    eu_expansion: List[str] = Field(
+        default=[],
+        description="Additional EU countries to include (optional)"
+    )
+
+    extra_countries: Optional[str] = Field(
+        default="",
+        max_length=500,
+        description="Comma-separated extra countries (optional)"
+    )
+
+    # Section 5: Audience & Planning
+    target_audience: Literal['general', 'academic', 'youth', 'family', 'specialists'] = Field(
+        default='general',
+        description="Primary target audience"
+    )
+
+    duration_weeks: int = Field(
+        default=12,
+        ge=2,
+        le=52,
+        description="Exhibition duration in weeks"
+    )
+
+    refinement_terms: Optional[str] = Field(
+        default="",
+        max_length=500,
+        description="Extra refinement terms (comma-separated, optional)"
+    )
+
+    # ===== LEGACY FIELDS (optional for backward compatibility) =====
+    # CRITICAL: These concepts must be mappable to Getty AAT terms
+    theme_concepts: Optional[List[str]] = Field(
+        default=[],
         max_length=10,
-        description="Key concepts that can be resolved to Getty AAT URIs"
+        description="Key concepts that can be resolved to Getty AAT URIs (LEGACY)"
     )
 
     # Artist preferences
@@ -152,9 +240,9 @@ class CuratorBrief(BaseModel):
     @field_validator('theme_concepts')
     @classmethod
     def validate_concepts(cls, v):
-        """Ensure concepts are appropriate for Getty AAT resolution"""
+        """Ensure concepts are appropriate for Getty AAT resolution (optional in MVP)"""
         if not v:
-            raise ValueError("At least one theme concept is required")
+            return v  # Now optional
 
         invalid_concepts = []
         for concept in v:
@@ -172,6 +260,22 @@ class CuratorBrief(BaseModel):
             raise ValueError(f"Invalid concepts: {', '.join(invalid_concepts)}")
 
         return [c.strip() for c in v]
+
+    @field_validator('year_range_from', 'year_range_to')
+    @classmethod
+    def validate_year_range(cls, v, info):
+        """Validate year range if provided"""
+        if v is None:
+            return v
+
+        field_name = info.field_name
+        if field_name == 'year_range_to':
+            # Check if from < to when both are set
+            year_from = info.data.get('year_range_from')
+            if year_from and v and year_from >= v:
+                raise ValueError("year_range_to must be after year_range_from")
+
+        return v
 
     @field_validator('reference_artists')
     @classmethod

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Test</title>
+</head>
+<body>
+    <h1>WebSocket Connection Test</h1>
+    <div id="log"></div>
+    <script>
+        const log = document.getElementById('log');
+        const sessionId = 'session-1759409029.247593';
+        const ws = new WebSocket(`ws://localhost:8001/ws/${sessionId}`);
+
+        ws.onopen = () => {
+            log.innerHTML += '<p style="color: green;">✅ Connected!</p>';
+        };
+
+        ws.onmessage = (event) => {
+            log.innerHTML += `<p><strong>Message:</strong> ${event.data}</p>`;
+        };
+
+        ws.onerror = (error) => {
+            log.innerHTML += `<p style="color: red;">❌ Error: ${JSON.stringify(error)}</p>`;
+            console.error('WebSocket error:', error);
+        };
+
+        ws.onclose = () => {
+            log.innerHTML += '<p style="color: orange;">🔌 Connection closed</p>';
+        };
+    </script>
+</body>
+</html>

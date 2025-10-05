@@ -141,13 +141,14 @@ class OrchestratorAgent:
         config: Optional[Dict[str, Any]] = None
     ) -> ExhibitionProposal:
         """
-        Execute the complete 3-stage pipeline
+        Execute the complete 3-stage pipeline or a specific phase
 
         Args:
             curator_brief: Input from curator
             session_id: Unique session identifier
             config: Optional configuration overrides
                 {
+                    'phase': 'theme_only' | 'artist_discovery' | 'artwork_discovery' | 'full',
                     'max_artists': 15,
                     'max_artworks': 50,
                     'min_artist_relevance': 0.5,
@@ -157,12 +158,13 @@ class OrchestratorAgent:
                 }
 
         Returns:
-            Complete ExhibitionProposal
+            Complete ExhibitionProposal (or partial result depending on phase)
         """
         start_time = datetime.utcnow()
 
         # Default configuration
         default_config = {
+            'phase': 'full',  # Default to full pipeline
             'max_artists': 15,
             'max_artworks': 50,
             'artworks_per_artist': 5,
@@ -173,6 +175,20 @@ class OrchestratorAgent:
         }
 
         config = {**default_config, **(config or {})}
+
+        # Route to phase-specific execution
+        phase = config.get('phase', 'full')
+
+        if phase == 'theme_only':
+            # Only execute theme refinement
+            return await self._execute_theme_only(curator_brief, session_id)
+        elif phase == 'artist_discovery':
+            # Load theme from session and execute artist discovery
+            return await self._execute_artists_only(session_id, config)
+        elif phase == 'artwork_discovery':
+            # Load artists from session and execute artwork discovery
+            return await self._execute_artworks_only(session_id, config)
+        # else: fall through to full pipeline execution below
 
         # Initialize status
         status = PipelineStatus(
@@ -445,6 +461,247 @@ class OrchestratorAgent:
         )
 
         return proposal
+
+    async def _execute_theme_only(
+        self,
+        curator_brief: CuratorBrief,
+        session_id: str
+    ) -> RefinedTheme:
+        """
+        Execute only theme refinement phase
+
+        Args:
+            curator_brief: Input from curator
+            session_id: Session identifier
+
+        Returns:
+            RefinedTheme object
+        """
+        logger.info(f"Session {session_id}: Executing theme-only phase")
+        start_time = datetime.utcnow()
+
+        # Initialize status
+        status = PipelineStatus(
+            session_id=session_id,
+            current_stage=PipelineStage.THEME_REFINEMENT,
+            progress_percentage=10,
+            status_message="Refining exhibition theme",
+            started_at=start_time,
+            updated_at=start_time
+        )
+        await self._send_progress(status)
+
+        try:
+            # Execute theme refinement
+            refined_theme = await self.theme_agent.refine_theme(curator_brief, session_id)
+
+            # Store in session manager if available
+            if self.session_manager:
+                await self.session_manager.store_refined_theme(session_id, refined_theme)
+
+            # Update progress
+            await self._update_progress(
+                status,
+                PipelineStage.THEME_REFINEMENT,
+                100,
+                f"Theme refined: {refined_theme.exhibition_title}",
+                stage_completed=PipelineStage.THEME_REFINEMENT
+            )
+
+            processing_time = (datetime.utcnow() - start_time).total_seconds()
+            logger.info(f"Session {session_id}: Theme-only phase completed in {processing_time:.2f}s")
+
+            return refined_theme
+
+        except Exception as e:
+            logger.error(f"Session {session_id}: Theme refinement failed: {e}", exc_info=True)
+            status.current_stage = PipelineStage.FAILED
+            status.error_message = str(e)
+            await self._send_progress(status)
+            raise
+
+    async def _execute_artists_only(
+        self,
+        session_id: str,
+        config: Dict[str, Any]
+    ) -> List[DiscoveredArtist]:
+        """
+        Execute only artist discovery phase
+        Loads theme from session and discovers artists
+
+        Args:
+            session_id: Session identifier
+            config: Configuration parameters
+
+        Returns:
+            List of DiscoveredArtist objects
+        """
+        logger.info(f"Session {session_id}: Executing artist discovery phase")
+        start_time = datetime.utcnow()
+
+        if not self.session_manager:
+            raise ValueError("Session manager required for phase-specific execution")
+
+        # Load refined theme from session
+        refined_theme = await self.session_manager.get_refined_theme(session_id)
+        if not refined_theme:
+            raise ValueError(f"Session {session_id}: No refined theme found")
+
+        # Check if theme is approved
+        can_proceed = await self.session_manager.can_start_phase(session_id, "artist_discovery")
+        if not can_proceed:
+            raise ValueError(f"Session {session_id}: Cannot start artist discovery - theme not approved")
+
+        # Initialize status
+        status = PipelineStatus(
+            session_id=session_id,
+            current_stage=PipelineStage.ARTIST_DISCOVERY,
+            progress_percentage=30,
+            status_message="Discovering relevant artists",
+            started_at=start_time,
+            updated_at=start_time
+        )
+        await self._send_progress(status)
+
+        try:
+            # Use simple Wikipedia-based discovery
+            simple_discoverer = SimpleArtistDiscovery(self.data_client)
+            raw_artists = await simple_discoverer.discover_artists(
+                refined_theme=refined_theme,
+                reference_artists=[],  # Could load from brief if stored in session
+                max_artists=config['max_artists'] * 2
+            )
+
+            # Convert to DiscoveredArtist objects with relevance scores
+            discovered_artists = []
+            for artist_data in raw_artists[:config['max_artists']]:
+                relevance_score, relevance_reasoning = await self._score_artist_with_llm(
+                    artist_data=artist_data,
+                    refined_theme=refined_theme,
+                    reference_artists=[]
+                )
+
+                discovered_artist = DiscoveredArtist(
+                    name=artist_data['name'],
+                    birth_year=artist_data.get('birth_year'),
+                    death_year=artist_data.get('death_year'),
+                    nationality=None,
+                    movements=[],
+                    biography=artist_data.get('description', ''),
+                    known_works_count=None,
+                    wikidata_id=artist_data.get('wikidata_id'),
+                    getty_ulan_id=None,
+                    source_endpoint='wikipedia',
+                    discovery_confidence=relevance_score,
+                    relevance_score=relevance_score,
+                    relevance_reasoning=relevance_reasoning,
+                    raw_data=artist_data
+                )
+                discovered_artists.append(discovered_artist)
+
+            # Update progress
+            await self._update_progress(
+                status,
+                PipelineStage.ARTIST_DISCOVERY,
+                100,
+                f"Discovered {len(discovered_artists)} artists",
+                stage_completed=PipelineStage.ARTIST_DISCOVERY
+            )
+
+            processing_time = (datetime.utcnow() - start_time).total_seconds()
+            logger.info(f"Session {session_id}: Artist discovery phase completed in {processing_time:.2f}s")
+
+            return discovered_artists
+
+        except Exception as e:
+            logger.error(f"Session {session_id}: Artist discovery failed: {e}", exc_info=True)
+            status.current_stage = PipelineStage.FAILED
+            status.error_message = str(e)
+            await self._send_progress(status)
+            raise
+
+    async def _execute_artworks_only(
+        self,
+        session_id: str,
+        config: Dict[str, Any]
+    ) -> List[ArtworkCandidate]:
+        """
+        Execute only artwork discovery phase
+        Loads theme and selected artists from session
+
+        Args:
+            session_id: Session identifier
+            config: Configuration parameters
+
+        Returns:
+            List of ArtworkCandidate objects
+        """
+        logger.info(f"Session {session_id}: Executing artwork discovery phase")
+        start_time = datetime.utcnow()
+
+        if not self.session_manager:
+            raise ValueError("Session manager required for phase-specific execution")
+
+        # Load refined theme and selected artists from session
+        session = await self.session_manager.get_session(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+
+        refined_theme = session.refined_theme
+        if not refined_theme:
+            raise ValueError(f"Session {session_id}: No refined theme found")
+
+        selected_artists = session.selected_artists
+        if not selected_artists:
+            raise ValueError(f"Session {session_id}: No artists selected")
+
+        # Check if we can proceed
+        can_proceed = await self.session_manager.can_start_phase(session_id, "artwork_discovery")
+        if not can_proceed:
+            raise ValueError(f"Session {session_id}: Cannot start artwork discovery - prerequisites not met")
+
+        # Initialize status
+        status = PipelineStatus(
+            session_id=session_id,
+            current_stage=PipelineStage.ARTWORK_DISCOVERY,
+            progress_percentage=60,
+            status_message="Discovering artworks",
+            started_at=start_time,
+            updated_at=start_time
+        )
+        await self._send_progress(status)
+
+        try:
+            # Execute artwork discovery
+            discovered_artworks = await self.artwork_agent.discover_artworks(
+                refined_theme=refined_theme,
+                selected_artists=selected_artists,
+                session_id=session_id,
+                max_artworks=config['max_artworks'] * 2,
+                min_relevance=config['min_artwork_relevance'],
+                artworks_per_artist=config['artworks_per_artist']
+            )
+
+            # Update progress
+            await self._update_progress(
+                status,
+                PipelineStage.ARTWORK_DISCOVERY,
+                100,
+                f"Discovered {len(discovered_artworks)} artworks",
+                stage_completed=PipelineStage.ARTWORK_DISCOVERY
+            )
+
+            processing_time = (datetime.utcnow() - start_time).total_seconds()
+            logger.info(f"Session {session_id}: Artwork discovery phase completed in {processing_time:.2f}s")
+
+            return discovered_artworks
+
+        except Exception as e:
+            logger.error(f"Session {session_id}: Artwork discovery failed: {e}", exc_info=True)
+            status.current_stage = PipelineStage.FAILED
+            status.error_message = str(e)
+            await self._send_progress(status)
+            raise
 
     async def _score_artist_with_llm(
         self,

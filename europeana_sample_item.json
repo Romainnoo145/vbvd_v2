@@ -1,0 +1,939 @@
+{
+  "completeness": 0,
+  "country": [
+    "Netherlands"
+  ],
+  "dataProvider": [
+    "International Institute of Social History"
+  ],
+  "dcDescription": [
+    "Sculpture au Panthéon"
+  ],
+  "dcDescriptionLangAware": {
+    "nl": [
+      "Sculpture au Panthéon"
+    ]
+  },
+  "dcLanguage": [
+    "nl",
+    "nld"
+  ],
+  "dcLanguageLangAware": {
+    "def": [
+      "nl",
+      "nld"
+    ]
+  },
+  "dcSubjectLangAware": {
+    "def": [
+      "http://data.europeana.eu/concept/51"
+    ],
+    "en": [
+      "Sculpture",
+      "Convention nationale (France)"
+    ]
+  },
+  "dcTitleLangAware": {
+    "nl": [
+      "Sculpture au Panthéon"
+    ]
+  },
+  "dcTypeLangAware": {
+    "def": [
+      "http://data.europeana.eu/concept/48"
+    ],
+    "en": [
+      "Picture postcard",
+      "Photo"
+    ]
+  },
+  "dctermsSpatial": [
+    "France",
+    "http://data.europeana.eu/place/85"
+  ],
+  "edmConcept": [
+    "http://data.europeana.eu/concept/51",
+    "http://data.europeana.eu/concept/48"
+  ],
+  "edmConceptLabel": [
+    {
+      "def": "Bildhauerkunst"
+    },
+    {
+      "def": "Fotografie"
+    },
+    {
+      "def": "Kuvanveisto"
+    },
+    {
+      "def": "Valokuva"
+    },
+    {
+      "def": "Скульптура"
+    },
+    {
+      "def": "Фотография"
+    },
+    {
+      "def": "Escultura"
+    },
+    {
+      "def": "Fotografia"
+    },
+    {
+      "def": "Скулптура"
+    },
+    {
+      "def": "Снимка"
+    },
+    {
+      "def": "Skulptūra"
+    },
+    {
+      "def": "Fotografija"
+    },
+    {
+      "def": "Kiparstvo"
+    },
+    {
+      "def": "Fotografija"
+    },
+    {
+      "def": "Tēlniecība"
+    },
+    {
+      "def": "Fotoattēls"
+    },
+    {
+      "def": "Sculpture"
+    },
+    {
+      "def": "Photographie"
+    },
+    {
+      "def": "Szobrászat"
+    },
+    {
+      "def": "Fénykép"
+    },
+    {
+      "def": "Sochárstvo"
+    },
+    {
+      "def": "Fotografia"
+    },
+    {
+      "def": "Kiparstvo"
+    },
+    {
+      "def": "Fotografija"
+    },
+    {
+      "def": "Dealbhóireacht"
+    },
+    {
+      "def": "Grianghraf"
+    },
+    {
+      "def": "Escultura"
+    },
+    {
+      "def": "Fotografia"
+    },
+    {
+      "def": "Bildhuggeri"
+    },
+    {
+      "def": "Fotografi"
+    },
+    {
+      "def": "Γλυπτική"
+    },
+    {
+      "def": "Φωτογραφία"
+    },
+    {
+      "def": "Skultura"
+    },
+    {
+      "def": "Fotografija"
+    },
+    {
+      "def": "Art of sculpture"
+    },
+    {
+      "def": "Photograph"
+    },
+    {
+      "def": "Scultura"
+    },
+    {
+      "def": "Fotografia"
+    },
+    {
+      "def": "Escultura"
+    },
+    {
+      "def": "Fotografía"
+    },
+    {
+      "def": "Skulptuur"
+    },
+    {
+      "def": "Foto"
+    },
+    {
+      "def": "Sochařství"
+    },
+    {
+      "def": "Fotografie"
+    },
+    {
+      "def": "Eskulturagintza"
+    },
+    {
+      "def": "Argazki"
+    },
+    {
+      "def": "Rzeźbiarstwo"
+    },
+    {
+      "def": "Fotografia"
+    },
+    {
+      "def": "Skulpturkunst"
+    },
+    {
+      "def": "Fotografi"
+    },
+    {
+      "def": "Sculptură"
+    },
+    {
+      "def": "Fotografie"
+    },
+    {
+      "def": "Beeldhouwkunst"
+    },
+    {
+      "def": "Foto"
+    }
+  ],
+  "edmConceptPrefLabelLangAware": {
+    "de": [
+      "Bildhauerkunst",
+      "Fotografie"
+    ],
+    "fi": [
+      "Kuvanveisto",
+      "Valokuva"
+    ],
+    "ru": [
+      "Фотография",
+      "Скульптура"
+    ],
+    "pt": [
+      "Fotografia",
+      "Escultura"
+    ],
+    "bg": [
+      "Снимка",
+      "Скулптура"
+    ],
+    "lt": [
+      "Skulptūra",
+      "Fotografija"
+    ],
+    "hr": [
+      "Kiparstvo",
+      "Fotografija"
+    ],
+    "lv": [
+      "Tēlniecība",
+      "Fotoattēls"
+    ],
+    "fr": [
+      "Sculpture",
+      "Photographie"
+    ],
+    "hu": [
+      "Fénykép",
+      "Szobrászat"
+    ],
+    "sk": [
+      "Fotografia",
+      "Sochárstvo"
+    ],
+    "sl": [
+      "Kiparstvo",
+      "Fotografija"
+    ],
+    "ga": [
+      "Dealbhóireacht",
+      "Grianghraf"
+    ],
+    "ca": [
+      "Fotografia",
+      "Escultura"
+    ],
+    "sv": [
+      "Fotografi",
+      "Bildhuggeri"
+    ],
+    "el": [
+      "Φωτογραφία",
+      "Γλυπτική"
+    ],
+    "mt": [
+      "Skultura",
+      "Fotografija"
+    ],
+    "en": [
+      "Art of sculpture",
+      "Photograph"
+    ],
+    "it": [
+      "Fotografia",
+      "Scultura"
+    ],
+    "es": [
+      "Fotografía",
+      "Escultura"
+    ],
+    "et": [
+      "Foto",
+      "Skulptuur"
+    ],
+    "cs": [
+      "Sochařství",
+      "Fotografie"
+    ],
+    "eu": [
+      "Eskulturagintza",
+      "Argazki"
+    ],
+    "pl": [
+      "Rzeźbiarstwo",
+      "Fotografia"
+    ],
+    "da": [
+      "Fotografi",
+      "Skulpturkunst"
+    ],
+    "ro": [
+      "Sculptură",
+      "Fotografie"
+    ],
+    "nl": [
+      "Foto",
+      "Beeldhouwkunst"
+    ]
+  },
+  "edmDatasetName": [
+    "180_IALHI_antifa"
+  ],
+  "edmIsShownAt": [
+    "http://hdl.handle.net/10622/E6EBF995-C8FE-458E-8492-AF8AEB2105C9"
+  ],
+  "edmIsShownBy": [
+    "http://hdl.handle.net/10622/30051000490562?locatt=view:level3"
+  ],
+  "edmPlace": [
+    "http://data.europeana.eu/place/85"
+  ],
+  "edmPlaceAltLabel": [
+    {
+      "def": "Französische Republik"
+    },
+    {
+      "def": "fr"
+    },
+    {
+      "def": "FR"
+    },
+    {
+      "def": "RF"
+    },
+    {
+      "def": "République française"
+    },
+    {
+      "def": "La France"
+    },
+    {
+      "def": "L’Hexagone"
+    },
+    {
+      "def": "La République française"
+    },
+    {
+      "def": "FRA"
+    },
+    {
+      "def": "Ranskan tasavalta"
+    },
+    {
+      "def": "Французская Республика"
+    },
+    {
+      "def": "ФР"
+    },
+    {
+      "def": "Французская республика"
+    },
+    {
+      "def": "Республика Франция"
+    },
+    {
+      "def": "Пятая Французская Республика"
+    },
+    {
+      "def": "France"
+    },
+    {
+      "def": "La France"
+    },
+    {
+      "def": "République française"
+    },
+    {
+      "def": "Republiken Frankrike"
+    },
+    {
+      "def": "Franska republiken"
+    },
+    {
+      "def": "FR"
+    },
+    {
+      "def": "France"
+    },
+    {
+      "def": "fr"
+    },
+    {
+      "def": "FR"
+    },
+    {
+      "def": "La France"
+    },
+    {
+      "def": "République française"
+    },
+    {
+      "def": "República Francesa"
+    },
+    {
+      "def": "República da França"
+    },
+    {
+      "def": "FRA"
+    },
+    {
+      "def": "Република Франция"
+    },
+    {
+      "def": "Френска република"
+    },
+    {
+      "def": "Γαλλική Δημοκρατία"
+    },
+    {
+      "def": "Repubblika Franċiża"
+    },
+    {
+      "def": "Prancuzija"
+    },
+    {
+      "def": "Prancūzijos Respublika"
+    },
+    {
+      "def": "fr"
+    },
+    {
+      "def": "FR"
+    },
+    {
+      "def": "Republic of France"
+    },
+    {
+      "def": "French Republic"
+    },
+    {
+      "def": "FRA"
+    },
+    {
+      "def": "The Hexagon"
+    },
+    {
+      "def": "Francijas Republika"
+    },
+    {
+      "def": "République française"
+    },
+    {
+      "def": "Republika Francuska"
+    },
+    {
+      "def": "Francuska republika"
+    },
+    {
+      "def": "République française"
+    },
+    {
+      "def": "FR"
+    },
+    {
+      "def": "République française"
+    },
+    {
+      "def": "FRA"
+    },
+    {
+      "def": "RF"
+    },
+    {
+      "def": "fr"
+    },
+    {
+      "def": "La République française"
+    },
+    {
+      "def": "Fr."
+    },
+    {
+      "def": "La France"
+    },
+    {
+      "def": "L'Hexagone"
+    },
+    {
+      "def": "Fille aînée de l'Église"
+    },
+    {
+      "def": "Pays de Molière"
+    },
+    {
+      "def": "FRA"
+    },
+    {
+      "def": "Francia Köztársaság"
+    },
+    {
+      "def": "República Francesa"
+    },
+    {
+      "def": "Republica Francesa"
+    },
+    {
+      "def": "Francouzská republika"
+    },
+    {
+      "def": "Francúzska republika"
+    },
+    {
+      "def": "Fhrainc"
+    },
+    {
+      "def": "Frainc"
+    },
+    {
+      "def": "An Frainc"
+    },
+    {
+      "def": "Republika Francji"
+    },
+    {
+      "def": "Republika Francuska"
+    },
+    {
+      "def": "Republica Franceză"
+    },
+    {
+      "def": "fr"
+    },
+    {
+      "def": "FR"
+    },
+    {
+      "def": "Republica Franța"
+    },
+    {
+      "def": "FRA"
+    },
+    {
+      "def": "Franse Republiek"
+    },
+    {
+      "def": "FR"
+    },
+    {
+      "def": "FRA"
+    },
+    {
+      "def": "República Francesa"
+    },
+    {
+      "def": "França Metropolitana"
+    },
+    {
+      "def": "República de França"
+    },
+    {
+      "def": "Estat francès"
+    },
+    {
+      "def": "France"
+    }
+  ],
+  "edmPlaceAltLabelLangAware": {
+    "de": [
+      "Französische Republik",
+      "fr",
+      "FR",
+      "RF",
+      "République française",
+      "La France",
+      "L’Hexagone",
+      "La République française",
+      "FRA"
+    ],
+    "fi": [
+      "Ranskan tasavalta"
+    ],
+    "ru": [
+      "Французская Республика",
+      "ФР",
+      "Французская республика",
+      "Республика Франция",
+      "Пятая Французская Республика"
+    ],
+    "sv": [
+      "France",
+      "La France",
+      "République française",
+      "Republiken Frankrike",
+      "Franska republiken",
+      "FR"
+    ],
+    "pt": [
+      "France",
+      "fr",
+      "FR",
+      "La France",
+      "République française",
+      "República Francesa",
+      "República da França",
+      "FRA"
+    ],
+    "bg": [
+      "Република Франция",
+      "Френска република"
+    ],
+    "el": [
+      "Γαλλική Δημοκρατία"
+    ],
+    "mt": [
+      "Repubblika Franċiża"
+    ],
+    "lt": [
+      "Prancuzija",
+      "Prancūzijos Respublika"
+    ],
+    "en": [
+      "fr",
+      "FR",
+      "Republic of France",
+      "French Republic",
+      "FRA",
+      "The Hexagon"
+    ],
+    "lv": [
+      "Francijas Republika",
+      "République française"
+    ],
+    "hr": [
+      "Republika Francuska",
+      "Francuska republika",
+      "République française"
+    ],
+    "fr": [
+      "FR",
+      "République française",
+      "FRA",
+      "RF",
+      "fr",
+      "La République française",
+      "Fr.",
+      "La France",
+      "L'Hexagone",
+      "Fille aînée de l'Église",
+      "Pays de Molière"
+    ],
+    "hu": [
+      "FRA",
+      "Francia Köztársaság"
+    ],
+    "es": [
+      "República Francesa",
+      "Republica Francesa"
+    ],
+    "cs": [
+      "Francouzská republika"
+    ],
+    "sk": [
+      "Francúzska republika"
+    ],
+    "ga": [
+      "Fhrainc",
+      "Frainc",
+      "An Frainc"
+    ],
+    "pl": [
+      "Republika Francji",
+      "Republika Francuska"
+    ],
+    "ro": [
+      "Republica Franceză",
+      "fr",
+      "FR",
+      "Republica Franța",
+      "FRA"
+    ],
+    "nl": [
+      "Franse Republiek",
+      "FR",
+      "FRA"
+    ],
+    "ca": [
+      "República Francesa",
+      "França Metropolitana",
+      "República de França",
+      "Estat francès",
+      "France"
+    ]
+  },
+  "edmPlaceLabel": [
+    {
+      "def": "Frankreich"
+    },
+    {
+      "def": "Франция"
+    },
+    {
+      "def": "Ranska"
+    },
+    {
+      "def": "França"
+    },
+    {
+      "def": "Франция"
+    },
+    {
+      "def": "Prancūzija"
+    },
+    {
+      "def": "Francija"
+    },
+    {
+      "def": "Francuska"
+    },
+    {
+      "def": "France"
+    },
+    {
+      "def": "Franciaország"
+    },
+    {
+      "def": "Francúzsko"
+    },
+    {
+      "def": "Francija"
+    },
+    {
+      "def": "An Fhrainc"
+    },
+    {
+      "def": "França"
+    },
+    {
+      "def": "Frankrike"
+    },
+    {
+      "def": "Γαλλία"
+    },
+    {
+      "def": "Franza"
+    },
+    {
+      "def": "France"
+    },
+    {
+      "def": "Francia"
+    },
+    {
+      "def": "Francia"
+    },
+    {
+      "def": "Prantsusmaa"
+    },
+    {
+      "def": "Frantzia"
+    },
+    {
+      "def": "Francie"
+    },
+    {
+      "def": "Francja"
+    },
+    {
+      "def": "Franța"
+    },
+    {
+      "def": "Frankrig"
+    },
+    {
+      "def": "Frankrijk"
+    }
+  ],
+  "edmPlaceLabelLangAware": {
+    "de": [
+      "Frankreich"
+    ],
+    "ru": [
+      "Франция"
+    ],
+    "fi": [
+      "Ranska"
+    ],
+    "pt": [
+      "França"
+    ],
+    "bg": [
+      "Франция"
+    ],
+    "lt": [
+      "Prancūzija"
+    ],
+    "lv": [
+      "Francija"
+    ],
+    "hr": [
+      "Francuska"
+    ],
+    "fr": [
+      "France"
+    ],
+    "hu": [
+      "Franciaország"
+    ],
+    "sk": [
+      "Francúzsko"
+    ],
+    "sl": [
+      "Francija"
+    ],
+    "ga": [
+      "An Fhrainc"
+    ],
+    "ca": [
+      "França"
+    ],
+    "sv": [
+      "Frankrike"
+    ],
+    "el": [
+      "Γαλλία"
+    ],
+    "mt": [
+      "Franza"
+    ],
+    "en": [
+      "France"
+    ],
+    "it": [
+      "Francia"
+    ],
+    "es": [
+      "Francia"
+    ],
+    "et": [
+      "Prantsusmaa"
+    ],
+    "eu": [
+      "Frantzia"
+    ],
+    "cs": [
+      "Francie"
+    ],
+    "pl": [
+      "Francja"
+    ],
+    "ro": [
+      "Franța"
+    ],
+    "da": [
+      "Frankrig"
+    ],
+    "nl": [
+      "Frankrijk"
+    ]
+  },
+  "edmPlaceLatitude": [
+    "47.0"
+  ],
+  "edmPlaceLongitude": [
+    "2.0"
+  ],
+  "edmPreview": [
+    "https://api.europeana.eu/thumbnail/v2/url.json?uri=http%3A%2F%2Fhdl.handle.net%2F10622%2F30051000490562%3Flocatt%3Dview%3Alevel3&type=IMAGE"
+  ],
+  "edmTimespan": [
+    "#1792%2F1795"
+  ],
+  "edmTimespanLabel": [
+    {
+      "def": "1792/1795"
+    }
+  ],
+  "edmTimespanLabelLangAware": {
+    "zxx": [
+      "1792/1795"
+    ]
+  },
+  "europeanaCollectionName": [
+    "180_IALHI_antifa"
+  ],
+  "europeanaCompleteness": 0,
+  "guid": "https://www.europeana.eu/item/180/10622_E6EBF995_C8FE_458E_8492_AF8AEB2105C9_cho?utm_source=api&utm_medium=api&utm_campaign=erockleyell",
+  "id": "/180/10622_E6EBF995_C8FE_458E_8492_AF8AEB2105C9_cho",
+  "index": 0,
+  "language": [
+    "mul"
+  ],
+  "link": "https://api.europeana.eu/record/180/10622_E6EBF995_C8FE_458E_8492_AF8AEB2105C9_cho.json?wskey=erockleyell",
+  "organizations": [
+    "http://data.europeana.eu/organization/4394",
+    "http://data.europeana.eu/organization/4438"
+  ],
+  "previewNoDistribute": false,
+  "provider": [
+    "International Association of Labour History Institutions"
+  ],
+  "rights": [
+    "http://rightsstatements.org/vocab/InC/1.0/"
+  ],
+  "score": 56.989407,
+  "timestamp": 1752037209254,
+  "timestamp_created": "2020-03-31T12:04:57.526Z",
+  "timestamp_created_epoch": 1585656297526,
+  "timestamp_update": "2020-03-31T12:04:57.526Z",
+  "timestamp_update_epoch": 1585656297526,
+  "title": [
+    "Sculpture au Panthéon"
+  ],
+  "type": "IMAGE",
+  "ugc": [
+    false
+  ]
+}
