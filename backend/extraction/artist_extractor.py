@@ -10,9 +10,11 @@ by artist, and aggregates metadata for each artist.
 
 import re
 import logging
-from typing import List, Dict, Set, Optional
+from typing import List, Dict, Set, Optional, Tuple
 from pydantic import BaseModel, Field
 from collections import defaultdict, Counter
+
+from backend.scoring import QualityScorer
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +33,31 @@ class Artist(BaseModel):
     media_types: Dict[str, int] = Field(default_factory=dict, description="Media types with counts")
     sections: List[str] = Field(default_factory=list, description="Exhibition sections matched")
 
+    # IIIF availability tracking
+    iiif_count: int = Field(default=0, description="Number of works with IIIF manifests")
+    iiif_percentage: float = Field(default=0.0, description="Percentage of works with IIIF (0-100)")
+
     # Computed fields
     year_range: Optional[tuple] = Field(default=None, description="(min_year, max_year)")
     primary_country: Optional[str] = Field(default=None, description="Most common country")
     primary_institution: Optional[str] = Field(default=None, description="Institution with most works")
+
+    # Derived fields (from Europeana data - no Wikipedia needed!)
+    estimated_birth_year: Optional[int] = Field(default=None, description="Estimated based on first artwork year - 25")
+    estimated_death_year: Optional[int] = Field(default=None, description="Estimated if not active recently")
+    nationality: Optional[str] = Field(default=None, description="Derived from primary_country")
+    relevance_reasoning: str = Field(default="", description="Generated explanation of artist relevance")
+    movement: Optional[str] = Field(default=None, description="Art movement derived from exhibition sections")
+
+    # Quality scoring (added by quality_scorer)
+    quality_score: Optional[float] = Field(default=None, description="Overall quality score (0-100)")
+    quality_breakdown: Optional[Dict[str, float]] = Field(default=None, description="Score breakdown by component")
+
+    # Wikipedia enrichment (optional - Task 37)
+    wikidata_id: Optional[str] = Field(default=None, description="Wikidata ID from Wikipedia")
+    wikipedia_bio: Optional[str] = Field(default=None, description="Biography from Wikipedia")
+    confirmed_birth_year: Optional[int] = Field(default=None, description="Confirmed birth year from Wikipedia")
+    confirmed_death_year: Optional[int] = Field(default=None, description="Confirmed death year from Wikipedia")
 
 
 class ArtistExtractionResults(BaseModel):
@@ -71,15 +94,18 @@ class ArtistExtractor:
     # URI patterns to detect
     URI_PATTERN = re.compile(r'^https?://|^urn:|^http://')
 
-    def __init__(self, min_works: int = 1):
+    def __init__(self, min_works: int = 1, theme_period: Optional[Tuple[int, int]] = None):
         """
         Initialize extractor
 
         Args:
             min_works: Minimum number of works required to include artist (default: 1)
+            theme_period: Optional (start_year, end_year) for quality scoring
         """
         self.min_works = min_works
-        logger.info(f"ArtistExtractor initialized with min_works={min_works}")
+        self.theme_period = theme_period
+        self.quality_scorer = QualityScorer(theme_period=theme_period)
+        logger.info(f"ArtistExtractor initialized with min_works={min_works}, theme_period={theme_period}")
 
     def extract_artists(self, artworks: List[Dict]) -> ArtistExtractionResults:
         """
@@ -151,14 +177,37 @@ class ArtistExtractor:
                 continue
 
             artist = self._build_artist(normalized_name, artist_artworks)
+
+            # Calculate quality score
+            quality_score = self.quality_scorer.score_artist(
+                works_count=artist.works_count,
+                iiif_percentage=artist.iiif_percentage,
+                institution_count=len(artist.institutions),
+                year_range=artist.year_range
+            )
+
+            # Add quality score to artist
+            artist.quality_score = quality_score.total_score
+            artist.quality_breakdown = {
+                'availability': quality_score.availability_score,
+                'iiif': quality_score.iiif_score,
+                'institution_diversity': quality_score.institution_diversity_score,
+                'time_period_match': quality_score.time_period_match_score,
+                'details': quality_score.breakdown
+            }
+
             artists.append(artist)
 
-        # Sort by works count (descending)
-        artists.sort(key=lambda a: a.works_count, reverse=True)
+        # Sort by quality score (descending) - artists with best availability rank highest
+        artists.sort(key=lambda a: a.quality_score if a.quality_score else 0, reverse=True)
 
         filtered_count = len(artist_groups) - len(artists)
 
         logger.info(f"Extracted {len(artists)} artists (filtered {filtered_count} with <{self.min_works} works)")
+
+        if artists:
+            top_artist = artists[0]
+            logger.info(f"Top artist: {top_artist.name} (quality: {top_artist.quality_score:.1f}, works: {top_artist.works_count}, IIIF: {top_artist.iiif_percentage:.0f}%)")
 
         return ArtistExtractionResults(
             total_artworks_processed=len(artworks),
@@ -247,6 +296,143 @@ class ArtistExtractor:
 
         return False
 
+    def _derive_birth_year(self, year_range: Optional[tuple]) -> Optional[int]:
+        """
+        Estimate birth year from first artwork year
+        Assumption: Artist typically starts creating artworks around age 25
+        """
+        if not year_range or not year_range[0]:
+            return None
+        return year_range[0] - 25
+
+    def _derive_death_year(self, year_range: Optional[tuple]) -> Optional[int]:
+        """
+        Estimate death year if artist seems inactive
+        If last work is recent (>= 2020), assume still alive (return None)
+        Otherwise, estimate death ~5 years after last work
+        """
+        if not year_range or not year_range[1]:
+            return None
+
+        last_year = year_range[1]
+        if last_year >= 2020:
+            return None  # Likely still active
+
+        return last_year + 5  # Estimate stopped working ~5 years before death
+
+    def _derive_nationality(self, primary_country: Optional[str]) -> Optional[str]:
+        """
+        Convert country code to nationality adjective
+        e.g., "Poland" -> "Polish", "Netherlands" -> "Dutch"
+        """
+        if not primary_country:
+            return None
+
+        # Common country to nationality mappings
+        nationality_map = {
+            'poland': 'Polish',
+            'netherlands': 'Dutch',
+            'belgium': 'Belgian',
+            'germany': 'German',
+            'france': 'French',
+            'spain': 'Spanish',
+            'italy': 'Italian',
+            'united kingdom': 'British',
+            'united states': 'American',
+            'denmark': 'Danish',
+            'sweden': 'Swedish',
+            'norway': 'Norwegian',
+            'finland': 'Finnish',
+            'austria': 'Austrian',
+            'switzerland': 'Swiss',
+            'portugal': 'Portuguese',
+            'greece': 'Greek',
+            'czech republic': 'Czech',
+            'hungary': 'Hungarian',
+            'romania': 'Romanian',
+            'croatia': 'Croatian',
+            'slovenia': 'Slovenian',
+            'estonia': 'Estonian',
+            'latvia': 'Latvian',
+            'lithuania': 'Lithuanian',
+        }
+
+        country_lower = primary_country.lower()
+        return nationality_map.get(country_lower, primary_country)
+
+    def _generate_relevance_reasoning(
+        self,
+        name: str,
+        works_count: int,
+        institutions: set,
+        primary_country: Optional[str],
+        media_types: Counter,
+        year_range: Optional[tuple],
+        sections: set
+    ) -> str:
+        """
+        Generate human-readable relevance reasoning from Europeana metadata
+        Explains why this artist is relevant for the exhibition
+        """
+        parts = []
+
+        # Works availability
+        parts.append(f"{works_count} {'work' if works_count == 1 else 'works'} available")
+
+        # Geographic info
+        if primary_country:
+            parts.append(f"primarily from {primary_country}")
+
+        # Institution count
+        inst_count = len(institutions)
+        if inst_count > 1:
+            parts.append(f"across {inst_count} institutions")
+
+        # Media types (top 2)
+        if media_types:
+            top_media = [media for media, _ in media_types.most_common(2)]
+            if top_media:
+                media_str = ' and '.join(top_media)
+                parts.append(f"working in {media_str}")
+
+        # Time period
+        if year_range:
+            start, end = year_range
+            if start == end:
+                parts.append(f"({start})")
+            else:
+                parts.append(f"({start}-{end})")
+
+        # Exhibition section matches
+        if sections:
+            section_count = len(sections)
+            parts.append(f"matching {section_count} exhibition {'section' if section_count == 1 else 'sections'}")
+
+        return "; ".join(parts).capitalize() + "."
+
+    def _derive_movement(self, sections: set) -> Optional[str]:
+        """
+        Derive art movement from exhibition section names
+        Matches common art movements
+        """
+        if not sections:
+            return None
+
+        # Common movements to look for in section names
+        movements = [
+            'surrealism', 'contemporary art', 'modernism', 'abstract',
+            'expressionism', 'cubism', 'dadaism', 'pop art',
+            'minimalism', 'conceptual art', 'installation art'
+        ]
+
+        sections_lower = ' '.join(sections).lower()
+
+        for movement in movements:
+            if movement in sections_lower:
+                return movement.title()
+
+        return None
+
     def _build_artist(self, normalized_name: str, artworks: List[Dict]) -> Artist:
         """Build Artist object with aggregated metadata"""
 
@@ -264,6 +450,7 @@ class ArtistExtractor:
         years = []
         media_types = Counter()
         sections = set()
+        iiif_count = 0
 
         for artwork in artworks:
             # Institutions
@@ -307,10 +494,33 @@ class ArtistExtractor:
             if section:
                 sections.add(section)
 
+            # IIIF availability tracking
+            edm_is_shown_by = artwork.get('edmIsShownBy')
+            if edm_is_shown_by:
+                iiif_count += 1
+
         # Compute derived fields
         year_range = (min(years), max(years)) if years else None
         primary_country = countries.most_common(1)[0][0] if countries else None
         primary_institution = list(institutions)[0] if institutions else None
+
+        # Calculate IIIF percentage
+        iiif_percentage = (iiif_count / len(artworks) * 100) if artworks else 0.0
+
+        # Derive additional fields
+        estimated_birth_year = self._derive_birth_year(year_range)
+        estimated_death_year = self._derive_death_year(year_range)
+        nationality = self._derive_nationality(primary_country)
+        relevance_reasoning = self._generate_relevance_reasoning(
+            name=normalized_name,
+            works_count=len(artworks),
+            institutions=institutions,
+            primary_country=primary_country,
+            media_types=media_types,
+            year_range=year_range,
+            sections=sections
+        )
+        movement = self._derive_movement(sections)
 
         return Artist(
             name=normalized_name,
@@ -322,7 +532,14 @@ class ArtistExtractor:
             years=sorted(years),
             media_types=dict(media_types.most_common(5)),  # Top 5 media types
             sections=sorted(list(sections)),
+            iiif_count=iiif_count,
+            iiif_percentage=round(iiif_percentage, 1),
             year_range=year_range,
             primary_country=primary_country,
-            primary_institution=primary_institution
+            primary_institution=primary_institution,
+            estimated_birth_year=estimated_birth_year,
+            estimated_death_year=estimated_death_year,
+            nationality=nationality,
+            relevance_reasoning=relevance_reasoning,
+            movement=movement
         )
