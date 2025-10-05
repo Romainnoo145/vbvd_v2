@@ -487,6 +487,10 @@ async def continue_to_next_phase(session_id: str, request: ContinueRequest):
         if request.phase not in ['artist_discovery', 'artwork_discovery']:
             raise HTTPException(status_code=400, detail="Phase must be 'artist_discovery' or 'artwork_discovery'")
 
+        # Mark theme as approved if starting artist discovery (BEFORE checking prerequisites)
+        if request.phase == 'artist_discovery':
+            await session_manager.approve_theme(session_id)
+
         # Check if we can start this phase
         can_proceed = await session_manager.can_start_phase(session_id, request.phase)
         if not can_proceed:
@@ -494,10 +498,6 @@ async def continue_to_next_phase(session_id: str, request: ContinueRequest):
                 status_code=400,
                 detail=f"Cannot start {request.phase} - prerequisites not met"
             )
-
-        # Mark theme as approved if starting artist discovery
-        if request.phase == 'artist_discovery':
-            await session_manager.approve_theme(session_id)
 
         # Start background task for the phase
         # TODO: Implement background task execution for phase continuation
