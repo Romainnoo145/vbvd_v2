@@ -7,6 +7,13 @@ Uses real Europeana data from query executor test
 import sys
 import os
 import asyncio
+import logging
+
+# Configure logging to see metrics
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(message)s'
+)
 
 # Add backend to path
 backend_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))

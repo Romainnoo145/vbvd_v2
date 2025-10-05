@@ -10,6 +10,7 @@ by artist, and aggregates metadata for each artist.
 
 import re
 import logging
+import time
 from typing import List, Dict, Set, Optional, Tuple
 from pydantic import BaseModel, Field
 from collections import defaultdict, Counter
@@ -104,6 +105,7 @@ class ArtistExtractor:
         min_works: int = 1,
         theme_period: Optional[Tuple[int, int]] = None,
         max_artists: int = 100,
+        min_artists: int = 50,
         max_unknown_percentage: float = 0.8
     ):
         """
@@ -113,16 +115,18 @@ class ArtistExtractor:
             min_works: Minimum number of works required to include artist (default: 1)
             theme_period: Optional (start_year, end_year) for quality scoring
             max_artists: Maximum number of top artists to return (default: 100)
+            min_artists: Minimum target number of artists to extract (default: 50)
             max_unknown_percentage: Max allowed percentage of "Unknown" creator works (default: 0.8 = 80%)
         """
         self.min_works = min_works
         self.theme_period = theme_period
         self.max_artists = max_artists
+        self.min_artists = min_artists
         self.max_unknown_percentage = max_unknown_percentage
         self.quality_scorer = QualityScorer(theme_period=theme_period)
         logger.info(
             f"ArtistExtractor initialized: min_works={min_works}, theme_period={theme_period}, "
-            f"max_artists={max_artists}, max_unknown_percentage={max_unknown_percentage}"
+            f"target_artists={min_artists}-{max_artists}, max_unknown_percentage={max_unknown_percentage}"
         )
 
     def extract_artists(self, artworks: List[Dict]) -> ArtistExtractionResults:
@@ -135,6 +139,8 @@ class ArtistExtractor:
         Returns:
             ArtistExtractionResults with aggregated artist data
         """
+        start_time = time.time()
+
         if not artworks:
             logger.warning("No artworks provided for artist extraction")
             return ArtistExtractionResults(
@@ -144,6 +150,7 @@ class ArtistExtractor:
             )
 
         logger.info(f"Extracting artists from {len(artworks)} artworks...")
+        extraction_start = time.time()
 
         # Group artworks by artist
         artist_groups: Dict[str, List[Dict]] = defaultdict(list)
@@ -184,7 +191,8 @@ class ArtistExtractor:
                 # Add to artist's artworks
                 artist_groups[normalized].append(artwork)
 
-        logger.info(f"Found {len(artist_groups)} unique artist names")
+        extraction_time = time.time() - extraction_start
+        logger.info(f"Found {len(artist_groups)} unique artist names in {extraction_time:.2f}s")
         logger.info(f"Filtered: {unknown_count} unknown, {uri_count} URIs, {various_count} various/multiple")
 
         # Build Artist objects with filtering
@@ -245,12 +253,68 @@ class ArtistExtractor:
         # Calculate total filtered
         filtered_count = filtered_by_min_works + filtered_by_unknown + filtered_by_top_limit
 
+        scoring_time = time.time() - extraction_start - extraction_time
+        total_time = time.time() - start_time
+
+        # Comprehensive logging and metrics
+        logger.info(f"="*60)
+        logger.info(f"ARTIST EXTRACTION SUMMARY")
+        logger.info(f"="*60)
         logger.info(f"Extracted {len(artists)} artists from {len(artist_groups)} unique names")
         logger.info(f"Filtered: {filtered_by_min_works} (min works), {filtered_by_unknown} (Unknown %), {filtered_by_top_limit} (top {self.max_artists} limit)")
 
+        # Performance metrics
+        logger.info(f"\nPerformance:")
+        logger.info(f"  - Extraction time: {extraction_time:.2f}s")
+        logger.info(f"  - Scoring time: {scoring_time:.2f}s")
+        logger.info(f"  - Total time: {total_time:.2f}s")
+        logger.info(f"  - Artists/sec: {len(artists)/total_time:.1f}" if total_time > 0 else "  - Artists/sec: N/A")
+
+        # Quality score distribution
         if artists:
+            quality_scores = [a.quality_score for a in artists if a.quality_score is not None]
+            if quality_scores:
+                logger.info(f"\nQuality Score Distribution:")
+                logger.info(f"  - Highest: {max(quality_scores):.1f}/100")
+                logger.info(f"  - Lowest: {min(quality_scores):.1f}/100")
+                logger.info(f"  - Average: {sum(quality_scores)/len(quality_scores):.1f}/100")
+                logger.info(f"  - Range: {max(quality_scores) - min(quality_scores):.1f} points")
+
+                # Score tier distribution
+                excellent = sum(1 for s in quality_scores if s >= 70)
+                good = sum(1 for s in quality_scores if 50 <= s < 70)
+                moderate = sum(1 for s in quality_scores if 30 <= s < 50)
+                low = sum(1 for s in quality_scores if s < 30)
+                logger.info(f"\nScore Tiers:")
+                logger.info(f"  - Excellent (70+): {excellent} artists ({excellent/len(quality_scores)*100:.1f}%)")
+                logger.info(f"  - Good (50-70): {good} artists ({good/len(quality_scores)*100:.1f}%)")
+                logger.info(f"  - Moderate (30-50): {moderate} artists ({moderate/len(quality_scores)*100:.1f}%)")
+                logger.info(f"  - Low (<30): {low} artists ({low/len(quality_scores)*100:.1f}%)")
+
+            # IIIF availability monitoring
+            iiif_percentages = [a.iiif_percentage for a in artists]
+            if iiif_percentages:
+                avg_iiif = sum(iiif_percentages) / len(iiif_percentages)
+                high_iiif_count = sum(1 for p in iiif_percentages if p >= 80)
+                logger.info(f"\nIIIF Availability:")
+                logger.info(f"  - Average: {avg_iiif:.1f}%")
+                logger.info(f"  - High IIIF (80%+): {high_iiif_count}/{len(artists)} artists ({high_iiif_count/len(artists)*100:.1f}%)")
+
+            # Top artist highlight
             top_artist = artists[0]
-            logger.info(f"Top artist: {top_artist.name} (quality: {top_artist.quality_score:.1f}, works: {top_artist.works_count}, IIIF: {top_artist.iiif_percentage:.0f}%)")
+            logger.info(f"\nTop Artist:")
+            logger.info(f"  - Name: {top_artist.name}")
+            logger.info(f"  - Quality Score: {top_artist.quality_score:.1f}/100")
+            logger.info(f"  - Works: {top_artist.works_count}")
+            logger.info(f"  - IIIF: {top_artist.iiif_percentage:.0f}%")
+            logger.info(f"  - Institutions: {len(top_artist.institutions)}")
+
+        # Alert if below minimum target
+        if len(artists) < self.min_artists:
+            logger.warning(f"⚠️  LOW ARTIST COUNT: Only {len(artists)} artists found (target: {self.min_artists}-{self.max_artists})")
+            logger.warning(f"   Consider: Broadening query, lowering min_works, or adjusting theme period")
+
+        logger.info(f"="*60)
 
         return ArtistExtractionResults(
             total_artworks_processed=len(artworks),
