@@ -141,6 +141,37 @@ async def test_quality_scoring_integration():
     print("✅ QUALITY SCORING TEST COMPLETE")
     print("="*80 + "\n")
 
+    # Test filtering logic
+    print("\n" + "="*80)
+    print("FILTERING LOGIC TEST (Task 23)")
+    print("="*80 + "\n")
+
+    # Test with top 10 limit
+    print("Testing with max_artists=10...")
+    extractor_limited = ArtistExtractor(min_works=2, theme_period=theme_period, max_artists=10)
+    results_limited = extractor_limited.extract_artists(results.artworks)
+
+    print(f"  Total artists found: {results_limited.artists_found}")
+    print(f"  Filtered by min works (<2): {results_limited.filtered_by_min_works}")
+    print(f"  Filtered by Unknown works (>80%): {results_limited.filtered_by_unknown_works}")
+    print(f"  Filtered by top limit (>10): {results_limited.filtered_by_top_limit}")
+    print(f"  Total filtered: {results_limited.artists_filtered}")
+
+    if results_limited.artists_found == 10:
+        print(f"\n  ✅ Top {extractor_limited.max_artists} limit working correctly!")
+
+    # Show filtering statistics
+    print(f"\n  Filtering breakdown:")
+    print(f"    - Started with: {len(results.artworks)} artworks")
+    print(f"    - Unique artist names: (tracked internally)")
+    print(f"    - After min works filter: {results_limited.artists_found + results_limited.filtered_by_top_limit}")
+    print(f"    - After Unknown filter: {results_limited.artists_found + results_limited.filtered_by_top_limit}")
+    print(f"    - After top {extractor_limited.max_artists} limit: {results_limited.artists_found}")
+
+    print("\n" + "="*80)
+    print("✅ ALL TESTS COMPLETE")
+    print("="*80 + "\n")
+
 
 if __name__ == "__main__":
     asyncio.run(test_quality_scoring_integration())

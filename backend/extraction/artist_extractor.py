@@ -72,6 +72,11 @@ class ArtistExtractionResults(BaseModel):
     uri_count: int = Field(default=0, description="Artworks with URI-only artist")
     various_count: int = Field(default=0, description="Artworks with Various/Multiple artists")
 
+    # Filtering statistics
+    filtered_by_min_works: int = Field(default=0, description="Artists filtered: too few works")
+    filtered_by_unknown_works: int = Field(default=0, description="Artists filtered: too many Unknown works")
+    filtered_by_top_limit: int = Field(default=0, description="Artists filtered: beyond top N limit")
+
 
 class ArtistExtractor:
     """
@@ -94,18 +99,31 @@ class ArtistExtractor:
     # URI patterns to detect
     URI_PATTERN = re.compile(r'^https?://|^urn:|^http://')
 
-    def __init__(self, min_works: int = 1, theme_period: Optional[Tuple[int, int]] = None):
+    def __init__(
+        self,
+        min_works: int = 1,
+        theme_period: Optional[Tuple[int, int]] = None,
+        max_artists: int = 100,
+        max_unknown_percentage: float = 0.8
+    ):
         """
         Initialize extractor
 
         Args:
             min_works: Minimum number of works required to include artist (default: 1)
             theme_period: Optional (start_year, end_year) for quality scoring
+            max_artists: Maximum number of top artists to return (default: 100)
+            max_unknown_percentage: Max allowed percentage of "Unknown" creator works (default: 0.8 = 80%)
         """
         self.min_works = min_works
         self.theme_period = theme_period
+        self.max_artists = max_artists
+        self.max_unknown_percentage = max_unknown_percentage
         self.quality_scorer = QualityScorer(theme_period=theme_period)
-        logger.info(f"ArtistExtractor initialized with min_works={min_works}, theme_period={theme_period}")
+        logger.info(
+            f"ArtistExtractor initialized: min_works={min_works}, theme_period={theme_period}, "
+            f"max_artists={max_artists}, max_unknown_percentage={max_unknown_percentage}"
+        )
 
     def extract_artists(self, artworks: List[Dict]) -> ArtistExtractionResults:
         """
@@ -169,13 +187,28 @@ class ArtistExtractor:
         logger.info(f"Found {len(artist_groups)} unique artist names")
         logger.info(f"Filtered: {unknown_count} unknown, {uri_count} URIs, {various_count} various/multiple")
 
-        # Build Artist objects
+        # Build Artist objects with filtering
         artists = []
+        filtered_by_min_works = 0
+        filtered_by_unknown = 0
+
         for normalized_name, artist_artworks in artist_groups.items():
-            # Filter by minimum works
+            # Filter 1: Minimum works requirement
             if len(artist_artworks) < self.min_works:
+                filtered_by_min_works += 1
                 continue
 
+            # Filter 2: Unknown works percentage
+            unknown_percentage = self._calculate_unknown_works_percentage(artist_artworks)
+            if unknown_percentage > self.max_unknown_percentage:
+                filtered_by_unknown += 1
+                logger.debug(
+                    f"Filtered artist '{normalized_name}': {unknown_percentage:.1%} Unknown works "
+                    f"(>{self.max_unknown_percentage:.0%} threshold)"
+                )
+                continue
+
+            # Build artist with metadata
             artist = self._build_artist(normalized_name, artist_artworks)
 
             # Calculate quality score
@@ -198,12 +231,22 @@ class ArtistExtractor:
 
             artists.append(artist)
 
-        # Sort by quality score (descending) - artists with best availability rank highest
+        # Sort by quality score (descending) - best artists first
         artists.sort(key=lambda a: a.quality_score if a.quality_score else 0, reverse=True)
 
-        filtered_count = len(artist_groups) - len(artists)
+        # Filter 3: Limit to top N artists
+        total_before_limit = len(artists)
+        if len(artists) > self.max_artists:
+            artists = artists[:self.max_artists]
+            filtered_by_top_limit = total_before_limit - self.max_artists
+        else:
+            filtered_by_top_limit = 0
 
-        logger.info(f"Extracted {len(artists)} artists (filtered {filtered_count} with <{self.min_works} works)")
+        # Calculate total filtered
+        filtered_count = filtered_by_min_works + filtered_by_unknown + filtered_by_top_limit
+
+        logger.info(f"Extracted {len(artists)} artists from {len(artist_groups)} unique names")
+        logger.info(f"Filtered: {filtered_by_min_works} (min works), {filtered_by_unknown} (Unknown %), {filtered_by_top_limit} (top {self.max_artists} limit)")
 
         if artists:
             top_artist = artists[0]
@@ -216,7 +259,10 @@ class ArtistExtractor:
             artists=artists,
             unknown_count=unknown_count,
             uri_count=uri_count,
-            various_count=various_count
+            various_count=various_count,
+            filtered_by_min_works=filtered_by_min_works,
+            filtered_by_unknown_works=filtered_by_unknown,
+            filtered_by_top_limit=filtered_by_top_limit
         )
 
     def _extract_creators(self, artwork: Dict) -> List[str]:
@@ -295,6 +341,36 @@ class ArtistExtractor:
             return True
 
         return False
+
+    def _calculate_unknown_works_percentage(self, artworks: List[Dict]) -> float:
+        """
+        Calculate percentage of artworks with Unknown/missing creator
+
+        Args:
+            artworks: List of artwork dicts for a single artist
+
+        Returns:
+            Percentage (0.0 to 1.0) of works with Unknown creator
+        """
+        if not artworks:
+            return 0.0
+
+        unknown_works = 0
+        for artwork in artworks:
+            creators = self._extract_creators(artwork)
+
+            # Check if all creators are invalid/unknown
+            all_invalid = True
+            for creator in creators:
+                normalized = self._normalize_name(creator)
+                if normalized and not self._is_invalid_name(normalized):
+                    all_invalid = False
+                    break
+
+            if all_invalid:
+                unknown_works += 1
+
+        return unknown_works / len(artworks)
 
     def _derive_birth_year(self, year_range: Optional[tuple]) -> Optional[int]:
         """
