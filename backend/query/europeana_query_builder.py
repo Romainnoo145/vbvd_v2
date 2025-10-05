@@ -31,16 +31,6 @@ class EuropeanaQuery(BaseModel):
     preview_count: Optional[int] = Field(default=None, description="Estimated result count from preview")
 
 
-class QueryPreview(BaseModel):
-    """Preview result for query validation"""
-    section_id: str
-    total_count: int
-    institution_count: Optional[int] = None
-    status: str  # "good", "warning", "error"
-    message: str
-    suggestions: List[str] = Field(default_factory=list)
-
-
 class EuropeanaQueryBuilder:
     """
     Transform RefinedTheme + CuratorBrief into optimized Europeana queries
@@ -177,29 +167,34 @@ class EuropeanaQueryBuilder:
 
     def _build_main_query(self, section_keywords: List[str]) -> str:
         """
-        Build main search query - SIMPLIFIED based on API testing
+        Build main search query - INTERNATIONAL approach
 
-        Strategy: BROAD discovery with OR logic
-        - Art movements from form (primary signal)
-        - 1-2 most relevant section keywords
+        Strategy: Use ONLY art movements (English) for international compatibility
+        - Art movements from form (primary signal) - these are in ENGLISH
+        - NO section keywords (they're in Dutch and don't work for France/Belgium/Germany!)
         - OR between terms (broad results for artist discovery)
         - TYPE:IMAGE filter
 
-        Tested approach:
-        - "Surrealism" OR "Contemporary Art" OR "digital" → 300+ results ✅
-        - Too many keywords with implicit AND → 0 results ❌
+        Why no Dutch keywords?
+        - Section keywords like "belicht", "verkent" are in DUTCH
+        - Don't work for France, Belgium, Germany collections
+        - Result: French works get excluded unfairly!
+
+        Solution: Art movements only (Surrealism, Contemporary Art, etc.)
+        - These are international English terms
+        - Work across ALL European collections ✅
 
         Args:
-            section_keywords: Keywords from section focus (we'll use top 1-2)
+            section_keywords: Keywords from section focus (IGNORED for international queries)
 
         Returns:
-            Query string like: ("Surrealism" OR "digital art") AND TYPE:IMAGE
+            Query string like: ("Surrealism" OR "Contemporary Art") AND TYPE:IMAGE
         """
         or_terms = []
 
-        # Add art movements from form - these are VALIDATED and work great
+        # Add art movements from form - these are VALIDATED and INTERNATIONAL (English)
         if self.brief.art_movements:
-            for movement_key in self.brief.art_movements[:2]:  # Top 2 movements
+            for movement_key in self.brief.art_movements[:3]:  # Top 3 movements for variety
                 if movement_key in ART_MOVEMENTS:
                     movement_terms = ART_MOVEMENTS[movement_key]
                     if movement_terms:
@@ -210,21 +205,11 @@ class EuropeanaQueryBuilder:
                         else:
                             or_terms.append(term)
 
-        # Add 1-2 most meaningful section keywords
-        # Filter out too-specific words that return 0 results
-        meaningful_keywords = [
-            kw for kw in section_keywords[:3]
-            if len(kw) > 4  # Avoid short generic words
-            and kw not in {'exploring', 'examining', 'investigating'}  # Skip action verbs
-        ]
+        # REMOVED: Section keywords (they're in Dutch, don't work internationally!)
+        # Old code added Dutch words like "belicht", "verkent", "onderzoeken"
+        # This caused France/Belgium/Germany to have much fewer results
 
-        for keyword in meaningful_keywords[:2]:  # Max 2 section keywords
-            if ' ' in keyword:
-                or_terms.append(f'"{keyword}"')
-            else:
-                or_terms.append(keyword)
-
-        # Fallback: if no terms, use generic "art"
+        # Fallback: if no movements selected, use generic "art"
         if not or_terms:
             or_terms.append('art')
 
@@ -273,22 +258,4 @@ class EuropeanaQueryBuilder:
         return normalized[:50]  # Limit length
 
 
-def preview_query_results(query: EuropeanaQuery, api_client) -> QueryPreview:
-    """
-    Preview query results without fetching full data (rows=0)
-
-    Args:
-        query: EuropeanaQuery to preview
-        api_client: EssentialDataClient instance
-
-    Returns:
-        QueryPreview with result counts and validation status
-    """
-    # This will be implemented in Task 3 (Query Validation)
-    # For now, return placeholder
-    return QueryPreview(
-        section_id=query.section_id,
-        total_count=0,
-        status="pending",
-        message="Preview not yet implemented"
-    )
+# Note: Query preview functionality is now provided by QueryValidator in query_validator.py
