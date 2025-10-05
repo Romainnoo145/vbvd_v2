@@ -40,6 +40,7 @@ class EuropeanaQueryBuilder:
     - Combine with art movements from form
     - Apply structured filters (TYPE, YEAR, media, geography)
     - Generate one query per exhibition section for targeted searches
+    - Use BILINGUAL keywords: English + local language for each country
     """
 
     # Common stopwords for keyword extraction
@@ -49,6 +50,41 @@ class EuropeanaQueryBuilder:
         'that', 'these', 'those', 'is', 'are', 'was', 'were', 'be', 'been',
         'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would',
         'can', 'could', 'should'
+    }
+
+    # Multilingual art keyword translations
+    # Maps English keywords to translations in Dutch (nl), French (fr), German (de)
+    MULTILINGUAL_KEYWORDS = {
+        # Media types
+        'painting': {'nl': 'schilderij', 'fr': 'peinture', 'de': 'Gemälde'},
+        'sculpture': {'nl': 'sculptuur', 'fr': 'sculpture', 'de': 'Skulptur'},
+        'drawing': {'nl': 'tekening', 'fr': 'dessin', 'de': 'Zeichnung'},
+        'photography': {'nl': 'fotografie', 'fr': 'photographie', 'de': 'Fotografie'},
+        'print': {'nl': 'prent', 'fr': 'estampe', 'de': 'Druck'},
+
+        # Visual concepts
+        'light': {'nl': 'licht', 'fr': 'lumière', 'de': 'Licht'},
+        'color': {'nl': 'kleur', 'fr': 'couleur', 'de': 'Farbe'},
+        'form': {'nl': 'vorm', 'fr': 'forme', 'de': 'Form'},
+        'composition': {'nl': 'compositie', 'fr': 'composition', 'de': 'Komposition'},
+        'abstract': {'nl': 'abstract', 'fr': 'abstrait', 'de': 'abstrakt'},
+        'landscape': {'nl': 'landschap', 'fr': 'paysage', 'de': 'Landschaft'},
+        'portrait': {'nl': 'portret', 'fr': 'portrait', 'de': 'Porträt'},
+
+        # Artistic concepts
+        'modern': {'nl': 'modern', 'fr': 'moderne', 'de': 'modern'},
+        'contemporary': {'nl': 'hedendaags', 'fr': 'contemporain', 'de': 'zeitgenössisch'},
+        'art': {'nl': 'kunst', 'fr': 'art', 'de': 'Kunst'},
+        'artist': {'nl': 'kunstenaar', 'fr': 'artiste', 'de': 'Künstler'},
+        'exhibition': {'nl': 'tentoonstelling', 'fr': 'exposition', 'de': 'Ausstellung'},
+    }
+
+    # Map country codes to language codes
+    COUNTRY_LANGUAGES = {
+        'netherlands': 'nl',
+        'belgium': 'nl',  # Can be nl or fr, using nl as primary
+        'france': 'fr',
+        'germany': 'de',
     }
 
     def __init__(self, curator_brief: CuratorBrief):
@@ -66,9 +102,11 @@ class EuropeanaQueryBuilder:
         """
         Generate balanced per-country queries for each exhibition section
 
-        Strategy: Generate separate queries per country to ensure balanced geographic distribution
-        - Each section × each country = one query
-        - Prevents Europeana relevance bias toward larger collections (e.g., Germany)
+        Strategy: Generate separate BILINGUAL queries per country
+        - Each section × each country = one query with English + local language keywords
+        - English keywords ensure international compatibility
+        - Local language keywords capture local metadata richness
+        - Prevents Europeana relevance bias toward larger collections
         - Guarantees equal representation from each geographic_focus country
 
         Args:
@@ -88,15 +126,15 @@ class EuropeanaQueryBuilder:
             # Extract semantic keywords from section focus
             keywords = self._extract_keywords(section_focus)
 
-            # Build main query (broad, semantic)
-            main_query = self._build_main_query(keywords)
-
-            # Generate per-country queries for balanced distribution
+            # Generate per-country BILINGUAL queries for balanced distribution
             if self.brief.geographic_focus:
                 # Calculate rows per country to balance across all countries
                 rows_per_country = 200 // len(self.brief.geographic_focus)
 
                 for country in self.brief.geographic_focus:
+                    # Build country-specific BILINGUAL query (English + local language)
+                    main_query = self._build_bilingual_query(keywords, country)
+
                     # Build country-specific filter
                     country_filter = f"COUNTRY:{country}"
 
@@ -109,9 +147,10 @@ class EuropeanaQueryBuilder:
                     )
 
                     queries.append(query)
-                    logger.info(f"  → {country}: {rows_per_country} rows with filter {country_filter}")
+                    logger.info(f"  → {country}: {rows_per_country} rows | Query: {main_query[:80]}...")
             else:
-                # Fallback: no geographic filter if not specified
+                # Fallback: no geographic filter if not specified (use English only)
+                main_query = self._build_bilingual_query(keywords, None)
                 query = EuropeanaQuery(
                     section_id=self._normalize_section_id(section_title),
                     section_title=section_title,
@@ -165,36 +204,35 @@ class EuropeanaQueryBuilder:
         logger.debug(f"Extracted keywords from '{focus_text[:50]}...': {keywords}")
         return keywords
 
-    def _build_main_query(self, section_keywords: List[str]) -> str:
+    def _build_bilingual_query(self, section_keywords: List[str], country: Optional[str] = None) -> str:
         """
-        Build main search query - INTERNATIONAL approach
+        Build BILINGUAL search query - English + local language for maximum coverage
 
-        Strategy: Use ONLY art movements (English) for international compatibility
-        - Art movements from form (primary signal) - these are in ENGLISH
-        - NO section keywords (they're in Dutch and don't work for France/Belgium/Germany!)
-        - OR between terms (broad results for artist discovery)
+        Strategy: Combine English and local language keywords
+        - Art movements from form (English - international)
+        - Context keywords (English - e.g., "painting", "light", "abstract")
+        - Same keywords translated to local language (e.g., French: "peinture", "lumière", "abstrait")
+        - OR between ALL terms (broad, inclusive results)
         - TYPE:IMAGE filter
 
-        Why no Dutch keywords?
-        - Section keywords like "belicht", "verkent" are in DUTCH
-        - Don't work for France, Belgium, Germany collections
-        - Result: French works get excluded unfairly!
-
-        Solution: Art movements only (Surrealism, Contemporary Art, etc.)
-        - These are international English terms
-        - Work across ALL European collections ✅
+        Why bilingual?
+        ✅ English keywords work for international collections and English metadata
+        ✅ Local language keywords capture local metadata richness
+        ✅ Maximum coverage across diverse Europeana collections
+        ✅ Fair and context-rich!
 
         Args:
-            section_keywords: Keywords from section focus (IGNORED for international queries)
+            section_keywords: Keywords from section focus (not used - reserved for future)
+            country: Target country (e.g., "france", "netherlands") - if None, uses English only
 
         Returns:
-            Query string like: ("Surrealism" OR "Contemporary Art") AND TYPE:IMAGE
+            Query string like: ("Surrealism" OR "painting" OR "peinture" OR "light" OR "lumière") AND TYPE:IMAGE
         """
         or_terms = []
 
-        # Add art movements from form - these are VALIDATED and INTERNATIONAL (English)
+        # 1. Add art movements from form - ENGLISH (international)
         if self.brief.art_movements:
-            for movement_key in self.brief.art_movements[:3]:  # Top 3 movements for variety
+            for movement_key in self.brief.art_movements[:2]:  # Top 2 movements
                 if movement_key in ART_MOVEMENTS:
                     movement_terms = ART_MOVEMENTS[movement_key]
                     if movement_terms:
@@ -205,13 +243,40 @@ class EuropeanaQueryBuilder:
                         else:
                             or_terms.append(term)
 
-        # REMOVED: Section keywords (they're in Dutch, don't work internationally!)
-        # Old code added Dutch words like "belicht", "verkent", "onderzoeken"
-        # This caused France/Belgium/Germany to have much fewer results
+        # 2. Add universal context keywords - BILINGUAL (English + local language)
+        context_keywords = self._get_context_keywords()
 
-        # Fallback: if no movements selected, use generic "art"
+        for english_keyword in context_keywords:
+            # Add English version
+            or_terms.append(english_keyword)
+
+            # Add local language version if country specified
+            if country and english_keyword in self.MULTILINGUAL_KEYWORDS:
+                country_lower = country.lower()
+                if country_lower in self.COUNTRY_LANGUAGES:
+                    lang_code = self.COUNTRY_LANGUAGES[country_lower]
+                    translations = self.MULTILINGUAL_KEYWORDS[english_keyword]
+
+                    if lang_code in translations:
+                        local_term = translations[lang_code]
+                        if local_term not in or_terms:  # Avoid duplicates
+                            or_terms.append(local_term)
+
+        # Fallback: if no terms, use generic "art" (+ local translation if available)
         if not or_terms:
             or_terms.append('art')
+            if country:
+                country_lower = country.lower()
+                if country_lower in self.COUNTRY_LANGUAGES:
+                    lang_code = self.COUNTRY_LANGUAGES[country_lower]
+                    if 'art' in self.MULTILINGUAL_KEYWORDS:
+                        local_art = self.MULTILINGUAL_KEYWORDS['art'].get(lang_code)
+                        if local_art:
+                            or_terms.append(local_art)
+
+        # Remove duplicates while preserving order
+        seen = set()
+        or_terms = [term for term in or_terms if not (term in seen or seen.add(term))]
 
         # Build query with OR logic
         if len(or_terms) == 1:
@@ -221,7 +286,54 @@ class EuropeanaQueryBuilder:
 
         query = f'{semantic_query} AND TYPE:IMAGE'
 
+        logger.debug(f"Built bilingual query for {country or 'international'}: {len(or_terms)} terms")
         return query
+
+    def _get_context_keywords(self) -> List[str]:
+        """
+        Get context keywords (English) based on curator brief
+
+        Returns English keywords like ['painting', 'light', 'abstract']
+        These will be translated to local language in _build_bilingual_query
+        """
+        keywords = []
+
+        # Add media types from brief
+        if self.brief.media_types:
+            media_map = {
+                'painting': 'painting',
+                'sculpture': 'sculpture',
+                'photography': 'photography',
+                'drawing': 'drawing',
+                'print': 'print',
+            }
+            for media in self.brief.media_types[:2]:  # Top 2
+                if media in media_map:
+                    keywords.append(media_map[media])
+
+        # Add thematic keywords based on art movements
+        if self.brief.art_movements:
+            for movement in self.brief.art_movements[:2]:
+                if 'surrealism' in movement.lower() or 'surreal' in movement.lower():
+                    if 'abstract' not in keywords:
+                        keywords.append('abstract')
+                elif 'abstract' in movement.lower():
+                    if 'abstract' not in keywords:
+                        keywords.append('abstract')
+                elif 'impression' in movement.lower():
+                    if 'light' not in keywords:
+                        keywords.append('light')
+                elif 'contemporary' in movement.lower():
+                    if 'modern' not in keywords:
+                        keywords.append('modern')
+
+        # Ensure we have at least 2 keywords
+        general_keywords = ['light', 'color', 'form']
+        for kw in general_keywords:
+            if kw not in keywords and len(keywords) < 3:
+                keywords.append(kw)
+
+        return keywords[:3]  # Max 3 context keywords
 
     def _build_qf_filters(self) -> List[str]:
         """
