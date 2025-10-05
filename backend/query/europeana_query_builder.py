@@ -206,19 +206,18 @@ class EuropeanaQueryBuilder:
 
     def _build_bilingual_query(self, section_keywords: List[str], country: Optional[str] = None) -> str:
         """
-        Build BILINGUAL search query - English + local language for maximum coverage
+        Build BILINGUAL search query - English + local language with AND logic for specificity
 
-        Strategy: Combine English and local language keywords
-        - Art movements from form (English - international)
-        - Context keywords (English - e.g., "painting", "light", "abstract")
-        - Same keywords translated to local language (e.g., French: "peinture", "lumière", "abstrait")
-        - OR between ALL terms (broad, inclusive results)
-        - TYPE:IMAGE filter
+        Strategy: Use AND to combine different query components
+        - Art movements (OR between movements): Surrealism OR Contemporary Art
+        - AND context keywords (OR between bilingual pairs): (light OR lumière OR color OR couleur)
+        - Result: Artworks must match BOTH movement AND context keywords
 
-        Why bilingual?
-        ✅ English keywords work for international collections and English metadata
-        ✅ Local language keywords capture local metadata richness
-        ✅ Maximum coverage across diverse Europeana collections
+        Structure: (movement1 OR movement2) AND (keyword1_en OR keyword1_local OR keyword2_en OR keyword2_local) AND TYPE:IMAGE
+
+        Why this structure?
+        ✅ Specific enough: Must match movement AND context (not just any term)
+        ✅ Bilingual within each group: English OR local language for each concept
         ✅ Fair and context-rich!
 
         Args:
@@ -226,29 +225,40 @@ class EuropeanaQueryBuilder:
             country: Target country (e.g., "france", "netherlands") - if None, uses English only
 
         Returns:
-            Query string like: ("Surrealism" OR "painting" OR "peinture" OR "light" OR "lumière") AND TYPE:IMAGE
+            Query string like: (Surrealism OR "Contemporary Art") AND (light OR lumière OR color OR couleur) AND TYPE:IMAGE
         """
-        or_terms = []
+        query_parts = []
 
-        # 1. Add art movements from form - ENGLISH (international)
+        # 1. Art movements group (OR between movements)
+        movement_terms = []
         if self.brief.art_movements:
             for movement_key in self.brief.art_movements[:2]:  # Top 2 movements
                 if movement_key in ART_MOVEMENTS:
-                    movement_terms = ART_MOVEMENTS[movement_key]
-                    if movement_terms:
+                    movement_list = ART_MOVEMENTS[movement_key]
+                    if movement_list:
+                        term = movement_list[0]
                         # Quote multi-word movements
-                        term = movement_terms[0]
                         if ' ' in term:
-                            or_terms.append(f'"{term}"')
+                            movement_terms.append(f'"{term}"')
                         else:
-                            or_terms.append(term)
+                            movement_terms.append(term)
 
-        # 2. Add universal context keywords - BILINGUAL (English + local language)
+        if movement_terms:
+            if len(movement_terms) == 1:
+                query_parts.append(movement_terms[0])
+            else:
+                query_parts.append('(' + ' OR '.join(movement_terms) + ')')
+        else:
+            # Fallback: generic "art"
+            query_parts.append('art')
+
+        # 2. Context keywords group - BILINGUAL (OR between all bilingual pairs)
+        context_terms = []
         context_keywords = self._get_context_keywords()
 
         for english_keyword in context_keywords:
             # Add English version
-            or_terms.append(english_keyword)
+            context_terms.append(english_keyword)
 
             # Add local language version if country specified
             if country and english_keyword in self.MULTILINGUAL_KEYWORDS:
@@ -259,34 +269,24 @@ class EuropeanaQueryBuilder:
 
                     if lang_code in translations:
                         local_term = translations[lang_code]
-                        if local_term not in or_terms:  # Avoid duplicates
-                            or_terms.append(local_term)
+                        if local_term not in context_terms:  # Avoid duplicates
+                            context_terms.append(local_term)
 
-        # Fallback: if no terms, use generic "art" (+ local translation if available)
-        if not or_terms:
-            or_terms.append('art')
-            if country:
-                country_lower = country.lower()
-                if country_lower in self.COUNTRY_LANGUAGES:
-                    lang_code = self.COUNTRY_LANGUAGES[country_lower]
-                    if 'art' in self.MULTILINGUAL_KEYWORDS:
-                        local_art = self.MULTILINGUAL_KEYWORDS['art'].get(lang_code)
-                        if local_art:
-                            or_terms.append(local_art)
+        if context_terms:
+            if len(context_terms) == 1:
+                query_parts.append(context_terms[0])
+            else:
+                query_parts.append('(' + ' OR '.join(context_terms) + ')')
 
-        # Remove duplicates while preserving order
-        seen = set()
-        or_terms = [term for term in or_terms if not (term in seen or seen.add(term))]
-
-        # Build query with OR logic
-        if len(or_terms) == 1:
-            semantic_query = or_terms[0]
+        # Build final query with AND between groups
+        if len(query_parts) == 1:
+            semantic_query = query_parts[0]
         else:
-            semantic_query = '(' + ' OR '.join(or_terms) + ')'
+            semantic_query = ' AND '.join(query_parts)
 
         query = f'{semantic_query} AND TYPE:IMAGE'
 
-        logger.debug(f"Built bilingual query for {country or 'international'}: {len(or_terms)} terms")
+        logger.debug(f"Built bilingual query for {country or 'international'}: movements={len(movement_terms)}, context={len(context_terms)}")
         return query
 
     def _get_context_keywords(self) -> List[str]:
